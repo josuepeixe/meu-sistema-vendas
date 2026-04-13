@@ -2,81 +2,154 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import dateutil.relativedelta
 
 # Configuração da página
-st.set_page_config(page_title="Vendas na Nuvem", layout="wide")
+st.set_page_config(page_title="Gestão de Vendas - Carnê Pro", layout="wide")
 
-# --- CONEXÃO COM GOOGLE SHEETS ---
-# O Streamlit vai buscar o link da planilha nos "Secrets" que vamos configurar
+# Conexão com Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def ler_dados():
-    return conn.read(ttl=0) # ttl=0 garante que ele pegue dados frescos, sem cache
+    try:
+        return conn.read(ttl=0)
+    except:
+        # Caso a planilha esteja vazia ou sem cabeçalho
+        return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+
+def calcular_opcoes_quinzena(hoje):
+    """Calcula as duas próximas datas possíveis (01 ou 15)"""
+    # Opção 1: Próxima quinzena imediata
+    if hoje.day < 15:
+        opt1 = hoje.replace(day=15)
+    else:
+        opt1 = (hoje + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+    
+    # Opção 2: A quinzena depois da opt1
+    if opt1.day == 15:
+        opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+    else:
+        opt2 = opt1.replace(day=15)
+        
+    return opt1, opt2
+
+def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
+    datas = []
+    data_atual = data_inicio
+    
+    for i in range(num_parcelas):
+        if i == 0:
+            datas.append(data_atual.strftime("%d/%m"))
+            continue
+            
+        if frequencia == "Mensal":
+            data_atual = data_atual + dateutil.relativedelta.relativedelta(months=1)
+        else: # Quinzena
+            if data_atual.day == 1:
+                data_atual = data_atual.replace(day=15)
+            else:
+                data_atual = (data_atual + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+        
+        datas.append(data_atual.strftime("%d/%m"))
+    return datas
 
 # --- INTERFACE ---
-st.title("🛍️ Sistema de Vendas (Google Sheets)")
+st.title("🛍️ Controle de Vendas - Revendedora")
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda", "Histórico de Vendas"])
 df = ler_dados()
 
 if menu == "Registrar Venda":
-    st.subheader("📝 Novo Registro")
+    st.subheader("📝 Novo Registro de Venda")
+    
     with st.form("form_venda", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             cliente = st.text_input("Nome do Cliente")
-            valor = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01)
+            valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01)
+            frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"])
+            
+            # Lógica extra para Quinzena
+            data_primeira_parcela = None
+            if frequencia == "Quinzena":
+                opt1, opt2 = calcular_opcoes_quinzena(datetime.now())
+                escolha_data = st.radio(
+                    "Quando será a primeira parcela?",
+                    options=[opt1, opt2],
+                    format_func=lambda x: x.strftime("%d/%m/%Y")
+                )
+                data_primeira_parcela = escolha_data
+            else:
+                # Se mensal, a primeira parcela é daqui a 30 dias (mesmo dia do mês que vem)
+                data_primeira_parcela = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+
         with col2:
-            parcelas = st.number_input("Quantidade de Parcelas", min_value=1, max_value=12, value=1)
+            num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1)
+            produtos = st.text_area("Produtos (ex: 1 kit essencial)")
+
+        submit = st.form_submit_button("Gerar Venda e Carnê")
         
-        produtos = st.text_area("Produtos")
-        submit = st.form_submit_button("Salvar na Planilha")
-        
-        if submit and cliente:
-            # Criar nova linha
+        if submit and cliente and produtos:
+            lista_datas = gerar_sequencia_datas(data_primeira_parcela, num_parcelas, frequencia)
+            valor_p = valor_total / num_parcelas
+            
+            # Montagem do carnê conforme seu modelo
+            carne_texto = f"{produtos} {valor_total:.2f}\n\n"
+            for d in lista_datas:
+                carne_texto += f"{valor_p:.2f} {d}\n"
+            
             nova_venda = pd.DataFrame([{
                 "id": len(df) + 1,
                 "cliente": cliente,
                 "produtos": produtos,
-                "valor": valor,
-                "data": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "parcelas_total": int(parcelas),
-                "parcelas_pagas": 0,
+                "valor": valor_total,
+                "data": datetime.now().strftime("%d/%m/%Y"),
+                "carne": carne_texto,
                 "status": "Pendente"
             }])
             
-            # Adicionar ao DataFrame existente e salvar
             df_atualizado = pd.concat([df, nova_venda], ignore_index=True)
             conn.update(data=df_atualizado)
-            st.success("Venda salva com sucesso na sua Planilha!")
+            st.success("Venda registrada! O carnê foi gerado com as datas escolhidas.")
             st.rerun()
 
 elif menu == "Histórico de Vendas":
-    st.subheader("📊 Histórico Real")
+    st.subheader("📊 Histórico e Baixas")
+    busca = st.text_input("🔍 Buscar Cliente")
     
     if not df.empty:
-        for index, row in df.iterrows():
-            with st.expander(f"{row['status']} | {row['cliente']} - R$ {row['valor']}"):
-                st.write(f"**Produtos:** {row['produtos']}")
-                st.write(f"**Parcelas:** {row['parcelas_pagas']} / {row['parcelas_total']}")
+        df_filtrado = df[df['cliente'].str.contains(busca, case=False)] if busca else df
+        
+        for index, row in df_filtrado.iterrows():
+            status_cor = "🔴" if row['status'] == "Pendente" else "🟢"
+            if row['status'] == "Pagamento Parcial": status_cor = "🔵"
+            
+            with st.expander(f"{status_cor} {row['cliente']} - Criado em: {row['data']}"):
+                st.code(row['carne'], language="text")
                 
-                # Botão de Pagamento
-                if row['status'] != "Pago":
-                    if st.button(f"Pagar Parcela", key=f"p_{index}"):
-                        df.at[index, 'parcelas_pagas'] += 1
-                        if df.at[index, 'parcelas_pagas'] >= df.at[index, 'parcelas_total']:
-                            df.at[index, 'status'] = "Pago"
-                        else:
-                            df.at[index, 'status'] = "Pagamento Parcial"
-                        
+                c1, c2 = st.columns([1, 4])
+                with c1:
+                    if "(Pago!)" not in row['carne'] or row['status'] != "Pago":
+                        if st.button(f"Baixar Parcela", key=f"p_{index}"):
+                            linhas = row['carne'].split('\n')
+                            novo_carne = []
+                            alterou = False
+                            
+                            for linha in linhas:
+                                if "/" in linha and "(Pago!)" not in linha and not alterou:
+                                    linha += " (Pago!)"
+                                    alterou = True
+                                novo_carne.append(linha)
+                            
+                            texto_final = "\n".join(novo_carne)
+                            tem_pendente = any("/" in l and "(Pago!)" not in l for l in novo_carne)
+                            
+                            df.at[index, 'carne'] = texto_final
+                            df.at[index, 'status'] = "Pago" if not tem_pendente else "Pagamento Parcial"
+                            conn.update(data=df)
+                            st.rerun()
+                with c2:
+                    if st.button("🗑️ Excluir", key=f"d_{index}"):
+                        df = df.drop(index)
                         conn.update(data=df)
                         st.rerun()
-                
-                if st.button("🗑️ Excluir", key=f"d_{index}"):
-                    df = df.drop(index)
-                    conn.update(data=df)
-                    st.rerun()
-        
-        st.metric("Total Acumulado", f"R$ {df['valor'].sum():.2f}")
-    else:
-        st.info("Planilha vazia.")
