@@ -3,10 +3,11 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime, timedelta
 import dateutil.relativedelta
-import urllib.parse  # Para formatar a mensagem do WhatsApp
+import urllib.parse
+import calendar
 
 # Configuração da página
-st.set_page_config(page_title="Vendas Pro + Dashboard", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Gestão de Vendas - Fluxo Quinzenal", layout="wide", page_icon="💰")
 
 # --- CONEXÃO E CACHE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -19,7 +20,7 @@ def ler_dados_cacheado():
             data = data.dropna(how='all')
             return data.fillna("")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
-    except Exception as e:
+    except:
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def atualizar_sistema():
@@ -102,47 +103,70 @@ if menu == "Registrar Venda":
             st.success("Venda salva!")
             if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
             atualizar_sistema()
+        else:
+            st.error("Preencha todos os campos.")
 
-# --- HISTÓRICO E DASHBOARD ---
+# --- HISTÓRICO E DASHBOARD QUINZENAL ---
 elif menu == "Histórico de Vendas":
-    # 📊 DASHBOARD (Resumo Financeiro)
-    st.subheader("📊 Resumo Financeiro")
+    # 📊 LÓGICA DO DASHBOARD QUINZENAL
+    hoje = datetime.now()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+    
+    if hoje.day <= 15:
+        inicio_periodo = 1
+        fim_periodo = 15
+        texto_periodo = f"01/{mes_atual:02d} a 15/{mes_atual:02d}"
+    else:
+        inicio_periodo = 16
+        fim_periodo = calendar.monthrange(ano_atual, mes_atual)[1]
+        texto_periodo = f"16/{mes_atual:02d} a {fim_periodo}/{mes_atual:02d}"
+
+    st.subheader(f"📊 Resumo Financeiro da Quinzena ({texto_periodo})")
+    
+    vol_periodo = 0.0
+    rec_periodo = 0.0
+    
     if not df.empty:
-        total_bruto = df['valor'].sum()
-        
-        # Lógica para calcular o que já foi pago baseado no texto do carnê
-        pago_acumulado = 0
         for _, row in df.iterrows():
             carne = str(row['carne'])
-            parcelas = [l for l in carne.split('\n') if '/' in l]
-            num_pagas = sum(1 for p in parcelas if '(Pago!)' in p)
-            if len(parcelas) > 0:
-                pago_acumulado += (row['valor'] / len(parcelas)) * num_pagas
+            linhas = carne.split('\n')
+            for linha in linhas:
+                if "/" in linha: # Identifica que é uma linha de parcela
+                    try:
+                        partes = linha.split()
+                        valor_parc = float(partes[0].replace(',', '.'))
+                        data_parc_str = partes[1] # Formato DD/MM
+                        dia_parc = int(data_parc_str.split('/')[0])
+                        mes_parc = int(data_parc_str.split('/')[1])
+                        
+                        # Verifica se a parcela pertence ao mês e quinzena atual
+                        if mes_parc == mes_atual and inicio_periodo <= dia_parc <= fim_periodo:
+                            vol_periodo += valor_parc
+                            if "(Pago!)" in linha:
+                                rec_periodo += valor_parc
+                    except:
+                        continue
         
-        pendente_acumulado = total_bruto - pago_acumulado
+        pend_periodo = vol_periodo - rec_periodo
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Volume Total Vendido", f"R$ {total_bruto:.2f}")
-        m2.metric("Total Recebido", f"R$ {pago_acumulado:.2f}", delta_color="normal")
-        m3.metric("Total a Receber", f"R$ {pendente_acumulado:.2f}", delta="- Pendente", delta_color="inverse")
+        m1.metric("Parcelas na Quinzena", f"R$ {vol_periodo:.2f}")
+        m2.metric("Recebido (Nesta Quinzena)", f"R$ {rec_periodo:.2f}")
+        m3.metric("A Receber (Nesta Quinzena)", f"R$ {pend_periodo:.2f}", delta_color="inverse")
     
     st.divider()
     
-    # 🔍 FILTROS
+    # 🔍 FILTROS E LISTA
     st.subheader("📂 Lista de Vendas")
-    c_busca, c_filtro = st.columns([2, 1])
-    with c_busca:
-        busca = st.text_input("🔍 Buscar Cliente")
-    with c_filtro:
-        filtro_status = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
+    busca = st.text_input("🔍 Buscar Cliente")
+    filtro_status = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
 
     if not df.empty:
         df_f = df.copy()
         if busca:
             df_f = df_f[df_f['cliente'].astype(str).str.contains(busca, case=False)]
         if filtro_status != "Todos":
-            # Filtra "Pendentes" mostrando tanto Pendentes quanto Parciais se desejar, 
-            # aqui filtramos exatamente pelo texto do status
             df_f = df_f[df_f['status'] == filtro_status]
 
         for index, row in df_f.iterrows():
@@ -154,8 +178,7 @@ elif menu == "Histórico de Vendas":
                 st.code(str(row['carne']), language="text")
                 
                 col_btn = st.columns([1, 1, 1, 2])
-                
-                with col_btn[0]: # BOTÃO PAGAR
+                with col_btn[0]:
                     if "(Pago!)" not in str(row['carne']) or row['status'] != "Pago":
                         if st.button("💰 Pagar", key=f"p_{index}"):
                             linhas = str(row['carne']).split('\n')
@@ -172,17 +195,12 @@ elif menu == "Histórico de Vendas":
                             conn.update(data=df)
                             atualizar_sistema()
                 
-                with col_btn[1]: # BOTÃO WHATSAPP
-                    # Prepara a mensagem para o WhatsApp
+                with col_btn[1]:
                     msg = f"Olá {row['cliente']}! Segue o resumo da sua compra:\n\n{row['carne']}"
-                    msg_url = urllib.parse.quote(msg)
-                    # Cria o link (sem número específico para você escolher o contato na hora)
-                    st.link_button("🟢 WhatsApp", f"https://wa.me/?text={msg_url}")
+                    st.link_button("🟢 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
 
-                with col_btn[2]: # BOTÃO EXCLUIR
+                with col_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
-                        df = df.drop(index)
-                        conn.update(data=df)
+                        df_novo = df.drop(index)
+                        conn.update(data=df_novo)
                         atualizar_sistema()
-    else:
-        st.info("Nenhuma venda encontrada.")
