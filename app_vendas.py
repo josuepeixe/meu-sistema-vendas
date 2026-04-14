@@ -1,12 +1,12 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime
-import dateutil.relativedelta
 from datetime import datetime, timedelta
+import dateutil.relativedelta
+import urllib.parse  # Para formatar a mensagem do WhatsApp
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Vendas Pro", layout="wide", page_icon="🛍️")
+st.set_page_config(page_title="Vendas Pro + Dashboard", layout="wide", page_icon="📈")
 
 # --- CONEXÃO E CACHE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -16,45 +16,31 @@ def ler_dados_cacheado():
     try:
         data = conn.read(ttl=0)
         if data is not None:
-            # Remove linhas totalmente vazias e trata erros de 'nan'
             data = data.dropna(how='all')
             return data.fillna("")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
     except Exception as e:
-        if "429" in str(e):
-            st.error("⚠️ Limite do Google atingido. Aguarde alguns segundos.")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def atualizar_sistema():
-    """Limpa o cache e recarrega a página para mostrar dados novos"""
     st.cache_data.clear()
     st.rerun()
 
-# --- FUNÇÕES DE LÓGICA DE DATAS ---
-# --- FUNÇÕES DE LÓGICA DE DATAS (COM MARGEM DE 7 DIAS REAL) ---
+# --- LÓGICA DE DATAS ---
 def calcular_opcoes_quinzena(data_referencia):
-    """Calcula as duas próximas quinzenas garantindo 7 dias de intervalo"""
-    # Define a data mínima permitida (hoje + 7 dias)
     data_minima = data_referencia + timedelta(days=7)
     data_minima = data_minima.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Lógica para encontrar a primeira data (opt1)
     if data_minima.day <= 1:
-        # Se a margem cair no dia 01 ou antes, a primeira opção é o dia 01 deste mês
         opt1 = data_minima.replace(day=1)
     elif data_minima.day <= 15:
-        # Se a margem cair entre o dia 02 e 15, a primeira opção é o dia 15 deste mês
         opt1 = data_minima.replace(day=15)
     else:
-        # Se a margem passar do dia 15, a primeira opção é o dia 01 do próximo mês
         opt1 = (data_minima + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
     
-    # Lógica para encontrar a segunda data (opt2) baseada na opt1
     if opt1.day == 1:
         opt2 = opt1.replace(day=15)
     else:
         opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
-        
     return opt1, opt2
 
 def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
@@ -74,107 +60,105 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
         datas.append(data_atual.strftime("%d/%m"))
     return datas
 
-# --- INTERFACE PRINCIPAL ---
-st.title("🛍️ Controle de Vendas - Revendedora")
+# --- INTERFACE ---
+st.title("🛍️ Gestão de Vendas")
 
-# Sidebar
 if st.sidebar.button("🔄 Atualizar Dados"):
     atualizar_sistema()
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda", "Histórico de Vendas"])
 df = ler_dados_cacheado()
 
-# --- FLUXO DE REGISTRO ---
+# --- REGISTRO DE VENDA ---
 if menu == "Registrar Venda":
-    st.subheader("📝 Novo Registro de Venda")
-    
-    # Inicialização do estado dos campos
-    if "c_in" not in st.session_state: st.session_state.c_in = ""
-    if "p_in" not in st.session_state: st.session_state.p_in = ""
-    if "v_in" not in st.session_state: st.session_state.v_in = 0.0
-
+    st.subheader("📝 Novo Registro")
     col1, col2 = st.columns(2)
     with col1:
         cliente = st.text_input("Nome do Cliente", key="c_field")
         valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, key="v_field", value=None)
         frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"], key="freq_field")
         
-        data_primeira_parcela = None
         if frequencia == "Quinzena":
-            # Uso de session_state para as opções de data não resetarem
             if "opcoes_q" not in st.session_state:
                 st.session_state.opcoes_q = calcular_opcoes_quinzena(datetime.now())
-            
-            data_primeira_parcela = st.radio(
-                "Quando será a primeira parcela?",
-                options=st.session_state.opcoes_q,
-                format_func=lambda x: x.strftime("%d/%m/%Y"),
-                key="radio_quinzena_fixo"
-            )
+            data_primeira_parcela = st.radio("Primeira parcela?", options=st.session_state.opcoes_q, format_func=lambda x: x.strftime("%d/%m/%Y"), key="q_radio")
         else:
-            if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
             data_primeira_parcela = (datetime.now() + dateutil.relativedelta.relativedelta(months=1))
 
     with col2:
-        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1, key="n_field")
-        produtos = st.text_area("Produtos e Detalhes", key="p_field")
+        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1)
+        produtos = st.text_area("Produtos e Detalhes")
 
-    if st.button("🚀 Registrar Venda e Gerar Carnê", type="primary"):
-        if cliente and produtos and valor_total > 0:
+    if st.button("🚀 Salvar Venda", type="primary"):
+        if cliente and produtos and valor_total:
             lista_datas = gerar_sequencia_datas(data_primeira_parcela, num_parcelas, frequencia)
             valor_p = valor_total / num_parcelas
-            
-            # Gerando o texto do carnê
             carne_texto = f"{produtos}\nValor Total: R$ {valor_total:.2f}\n\n"
             for d in lista_datas:
                 carne_texto += f"{valor_p:.2f} {d}\n"
             
-            nova_venda = pd.DataFrame([{
-                "id": len(df) + 1,
-                "cliente": cliente,
-                "produtos": produtos,
-                "valor": valor_total,
-                "data": datetime.now().strftime("%d/%m/%Y"),
-                "carne": carne_texto,
-                "status": "Pendente"
-            }])
-            
-            # Salvando
-            df_final = pd.concat([df, nova_venda], ignore_index=True)
-            conn.update(data=df_final)
-            
-            st.success("✅ Venda salva na planilha!")
+            nova_venda = pd.DataFrame([{"id": len(df)+1, "cliente": cliente, "produtos": produtos, "valor": valor_total, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne_texto, "status": "Pendente"}])
+            conn.update(data=pd.concat([df, nova_venda], ignore_index=True))
+            st.success("Venda salva!")
             if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
             atualizar_sistema()
-        else:
-            st.error("⚠️ Preencha todos os campos obrigatórios.")
 
-# --- FLUXO DE HISTÓRICO ---
+# --- HISTÓRICO E DASHBOARD ---
 elif menu == "Histórico de Vendas":
-    st.subheader("📊 Histórico e Baixas")
-    busca = st.text_input("🔍 Buscar Cliente")
-    
+    # 📊 DASHBOARD (Resumo Financeiro)
+    st.subheader("📊 Resumo Financeiro")
     if not df.empty:
-        # Filtro de busca (seguro contra nulos)
-        df_filtrado = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
+        total_bruto = df['valor'].sum()
         
-        for index, row in df_filtrado.iterrows():
+        # Lógica para calcular o que já foi pago baseado no texto do carnê
+        pago_acumulado = 0
+        for _, row in df.iterrows():
+            carne = str(row['carne'])
+            parcelas = [l for l in carne.split('\n') if '/' in l]
+            num_pagas = sum(1 for p in parcelas if '(Pago!)' in p)
+            if len(parcelas) > 0:
+                pago_acumulado += (row['valor'] / len(parcelas)) * num_pagas
+        
+        pendente_acumulado = total_bruto - pago_acumulado
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Volume Total Vendido", f"R$ {total_bruto:.2f}")
+        m2.metric("Total Recebido", f"R$ {pago_acumulado:.2f}", delta_color="normal")
+        m3.metric("Total a Receber", f"R$ {pendente_acumulado:.2f}", delta="- Pendente", delta_color="inverse")
+    
+    st.divider()
+    
+    # 🔍 FILTROS
+    st.subheader("📂 Lista de Vendas")
+    c_busca, c_filtro = st.columns([2, 1])
+    with c_busca:
+        busca = st.text_input("🔍 Buscar Cliente")
+    with c_filtro:
+        filtro_status = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
+
+    if not df.empty:
+        df_f = df.copy()
+        if busca:
+            df_f = df_f[df_f['cliente'].astype(str).str.contains(busca, case=False)]
+        if filtro_status != "Todos":
+            # Filtra "Pendentes" mostrando tanto Pendentes quanto Parciais se desejar, 
+            # aqui filtramos exatamente pelo texto do status
+            df_f = df_f[df_f['status'] == filtro_status]
+
+        for index, row in df_f.iterrows():
             if not row['cliente'] or str(row['cliente']).lower() == "nan": continue
-            
             status_cor = "🔴" if row['status'] == "Pendente" else "🟢"
             if row['status'] == "Pagamento Parcial": status_cor = "🔵"
             
-            texto_carne = str(row['carne']) if row['carne'] else "Carnê vazio."
-
-            with st.expander(f"{status_cor} {row['cliente']} - Criado em: {row['data']}"):
-                st.code(texto_carne, language="text")
+            with st.expander(f"{status_cor} {row['cliente']} - R$ {row['valor']:.2f}"):
+                st.code(str(row['carne']), language="text")
                 
-                c1, c2 = st.columns([1, 4])
-                with c1:
-                    # Só mostra botão de pagar se houver parcelas pendentes
-                    if "(Pago!)" not in texto_carne or row['status'] != "Pago":
-                        if st.button(f"Pagar Parcela", key=f"btn_p_{index}"):
-                            linhas = texto_carne.split('\n')
+                col_btn = st.columns([1, 1, 1, 2])
+                
+                with col_btn[0]: # BOTÃO PAGAR
+                    if "(Pago!)" not in str(row['carne']) or row['status'] != "Pago":
+                        if st.button("💰 Pagar", key=f"p_{index}"):
+                            linhas = str(row['carne']).split('\n')
                             novo_carne = []
                             alterou = False
                             for l in linhas:
@@ -182,21 +166,23 @@ elif menu == "Histórico de Vendas":
                                     l += " (Pago!)"
                                     alterou = True
                                 novo_carne.append(l)
-                            
-                            texto_final = "\n".join(novo_carne)
-                            pendente = any("/" in l and "(Pago!)" not in l for l in novo_carne)
-                            
-                            df.at[index, 'carne'] = texto_final
-                            df.at[index, 'status'] = "Pago" if not pendente else "Pagamento Parcial"
+                            df.at[index, 'carne'] = "\n".join(novo_carne)
+                            tem_p = any("/" in l and "(Pago!)" not in l for l in novo_carne)
+                            df.at[index, 'status'] = "Pago" if not tem_p else "Pagamento Parcial"
                             conn.update(data=df)
                             atualizar_sistema()
-                with c2:
-                    if st.button("🗑️ Excluir Venda", key=f"btn_d_{index}"):
-                        df_novo = df.drop(index)
-                        conn.update(data=df_novo)
+                
+                with col_btn[1]: # BOTÃO WHATSAPP
+                    # Prepara a mensagem para o WhatsApp
+                    msg = f"Olá {row['cliente']}! Segue o resumo da sua compra:\n\n{row['carne']}"
+                    msg_url = urllib.parse.quote(msg)
+                    # Cria o link (sem número específico para você escolher o contato na hora)
+                    st.link_button("🟢 WhatsApp", f"https://wa.me/?text={msg_url}")
+
+                with col_btn[2]: # BOTÃO EXCLUIR
+                    if st.button("🗑️", key=f"d_{index}"):
+                        df = df.drop(index)
+                        conn.update(data=df)
                         atualizar_sistema()
-        
-        st.divider()
-        st.metric("Total Acumulado em Vendas", f"R$ {df['valor'].sum():.2f}")
     else:
-        st.info("Nenhuma venda encontrada na planilha.")
+        st.info("Nenhuma venda encontrada.")
