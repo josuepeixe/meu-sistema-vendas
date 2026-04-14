@@ -83,7 +83,7 @@ if menu == "Registrar Venda":
     col1, col2 = st.columns(2)
     with col1:
         cliente = st.text_input("Nome do Cliente", key="c_field")
-        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, key="v_field")
+        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, key="v_field", value=None)
         frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"], key="freq_field")
         
         data_primeira_parcela = None
@@ -112,7 +112,7 @@ if menu == "Registrar Venda":
             valor_p = valor_total / num_parcelas
             
             # Gerando o texto do carnê
-            carne_texto = f"{produtos} {valor_total:.2f}\n\n"
+            carne_texto = f"{produtos}\nValor Total: R$ {valor_total:.2f}\n\n"
             for d in lista_datas:
                 carne_texto += f"{valor_p:.2f} {d}\n"
             
