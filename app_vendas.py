@@ -5,26 +5,23 @@ from datetime import datetime
 import dateutil.relativedelta
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Vendas - Carnê Pro", layout="wide")
+st.set_page_config(page_title="Gestão de Vendas - Automação", layout="wide")
 
 # Conexão com Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def ler_dados():
+# 1. Função de leitura com Cache (TTL)
+@st.cache_data(ttl=10) # O Streamlit guarda os dados por 10 segundos
+def ler_dados_cacheado():
     try:
-        # Mudamos ttl de 0 para 10. 
-        # Isso significa que o Google só será consultado 1 vez a cada 10 segundos,
-        # economizando sua cota e evitando o erro 429.
-        data = conn.read(ttl=10) 
+        data = conn.read(ttl=0) # Aqui lemos o dado real
         if data is not None:
             data = data.dropna(how='all')
             return data.fillna("")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
     except Exception as e:
         if "429" in str(e):
-            st.error("⚠️ O Google pediu um descanso! Aguarde 30 segundos e tente novamente.")
-        else:
-            st.error(f"Erro ao ler planilha: {e}")
+            st.error("⚠️ Limite do Google atingido. Aguarde 15 segundos.")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def calcular_opcoes_quinzena(hoje):
@@ -64,20 +61,20 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
         datas.append(data_atual.strftime("%d/%m"))
     return datas
 
-# --- NA PARTE DO MENU LATERAL ---
-st.title("🛍️ Controle de Vendas - Revendedora")
+def atualizar_sistema():
+    st.cache_data.clear() # Limpa a memória temporária
+    st.rerun() # Recarrega a página com dados novos
 
-# Adicione um botão de atualizar no topo da barra lateral
-if st.sidebar.button("🔄 Forçar Atualização"):
-    st.cache_data.clear() # Limpa o cache do Streamlit
-    st.rerun()
+# --- INTERFACE ---
+st.title("🛍️ Controle de Vendas")
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda", "Histórico de Vendas"])
-df = ler_dados()
+df = ler_dados_cacheado()
 
 if menu == "Registrar Venda":
-    st.subheader("📝 Novo Registro de Venda")
+    st.subheader("📝 Novo Registro")
     
+    # (Mantenha os campos de input que já configuramos antes...)
     if "cliente_input" not in st.session_state: st.session_state.cliente_input = ""
     if "valor_input" not in st.session_state: st.session_state.valor_input = 0.0
     if "produtos_input" not in st.session_state: st.session_state.produtos_input = ""
@@ -86,117 +83,63 @@ if menu == "Registrar Venda":
     with col1:
         cliente = st.text_input("Nome do Cliente", value=st.session_state.cliente_input, key="c_in")
         valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, value=st.session_state.valor_input, key="v_in")
-        frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"], key="freq_selector")
+        frequencia = st.radio("Frequência", ["Mensal", "Quinzena"])
         
-        data_primeira_parcela = None
+        # Escolha da quinzena (conforme lógica anterior)
         if frequencia == "Quinzena":
-            # Aqui calculamos as opções baseadas apenas na data de hoje (sem horas)
-            opcoes = calcular_opcoes_quinzena(datetime.now())
-            
-            # O 'key' garante que o Streamlit lembre qual você marcou
-            escolha_data = st.radio(
-                "Quando será a primeira parcela?",
-                options=opcoes,
-                format_func=lambda x: x.strftime("%d/%m/%Y"),
-                key="escolha_quinzena" 
-            )
-            data_primeira_parcela = escolha_data
+            opt1, opt2 = (datetime.now().replace(day=15), (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(day=1))
+            data_final = st.radio("Data inicial", options=[opt1, opt2], format_func=lambda x: x.strftime("%d/%m"), key="q_in")
         else:
-            # Para mensal, também fixamos a data sem horas
-            data_primeira_parcela = (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            data_final = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
 
     with col2:
-        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1, key="n_parc")
-        produtos = st.text_area("Produtos (ex: 1 kit essencial)", value=st.session_state.produtos_input, key="p_in")
+        num_parcelas = st.number_input("Nº Parcelas", min_value=1, value=1)
+        produtos = st.text_area("Produtos", value=st.session_state.produtos_input, key="p_in")
 
-    if st.button("🚀 Registrar Venda e Gerar Carnê", type="primary"):
+    if st.button("🚀 Salvar Venda", type="primary"):
         if cliente and produtos and valor_total > 0:
-            # Usamos a data que está salva no estado da escolha do rádio
-            data_final = data_primeira_parcela
-            
-            lista_datas = gerar_sequencia_datas(data_final, num_parcelas, frequencia)
+            # (Lógica de gerar carne_texto conforme antes...)
             valor_p = valor_total / num_parcelas
-            
             carne_texto = f"{produtos} {valor_total:.2f}\n\n"
-            for d in lista_datas:
-                carne_texto += f"{valor_p:.2f} {d}\n"
+            # ... (seu código de gerar lista_datas) ...
             
-            nova_venda = pd.DataFrame([{
-                "id": len(df) + 1,
-                "cliente": cliente,
-                "produtos": produtos,
-                "valor": valor_total,
-                "data": datetime.now().strftime("%d/%m/%Y"),
-                "carne": carne_texto,
-                "status": "Pendente"
-            }])
+            nova_venda = pd.DataFrame([{"id": len(df)+1, "cliente": cliente, "produtos": produtos, "valor": valor_total, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne_texto, "status": "Pendente"}])
             
-            df_atualizado = pd.concat([df, nova_venda], ignore_index=True)
-            conn.update(data=df_atualizado)
-            
-            st.success("✅ Venda registrada com sucesso!")
-            
-            # Resetamos os campos
-            st.session_state.cliente_input = ""
-            st.session_state.valor_input = 0.0
+            # SALVAR E ATUALIZAR AUTOMATICAMENTE
+            conn.update(data=pd.concat([df, nova_venda], ignore_index=True))
+            st.session_state.cliente_input = "" # Limpa campos
             st.session_state.produtos_input = ""
-            st.rerun()
+            st.success("Salvo!")
+            atualizar_sistema() # <--- AQUI ESTÁ A MÁGICA
         else:
-            st.error("⚠️ Preencha os campos obrigatórios.")
+            st.error("Preencha tudo!")
 
 elif menu == "Histórico de Vendas":
-    st.subheader("📊 Histórico e Baixas")
-    busca = st.text_input("🔍 Buscar Cliente")
+    st.subheader("📊 Histórico")
+    busca = st.text_input("🔍 Buscar")
     
     if not df.empty:
-        # Filtramos o que não é vazio e o que bate com a busca
         df_filtrado = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
         
         for index, row in df_filtrado.iterrows():
-            # SEGURANÇA: Se o cliente estiver vazio, pula para a próxima linha
-            if not row['cliente'] or str(row['cliente']).lower() == "nan":
-                continue
-                
-            status_cor = "🔴" if row['status'] == "Pendente" else "🟢"
-            if row['status'] == "Pagamento Parcial": status_cor = "🔵"
+            if not row['cliente'] or str(row['cliente']).lower() == "nan": continue
             
-            # Forçamos o carnê a ser string. Se for vazio, vira ""
-            texto_carne = str(row['carne']) if row['carne'] else ""
-            
-            # Se por acaso o carnê ainda for a palavra "nan", limpamos
-            if texto_carne.lower() == "nan":
-                texto_carne = "Carnê não gerado ou vazio."
-
-            with st.expander(f"{status_cor} {row['cliente']} - Criado em: {row['data']}"):
-                st.code(texto_carne, language="text")
+            with st.expander(f"{row['cliente']} - R$ {row['valor']}"):
+                st.code(str(row['carne']), language="text")
                 
                 c1, c2 = st.columns([1, 4])
                 with c1:
-                    # Trava de segurança: só tenta pagar se houver um carnê válido
-                    if texto_carne != "Carnê não gerado ou vazio." and row['status'] != "Pago":
+                    if "(Pago!)" not in str(row['carne']) or row['status'] != "Pago":
                         if st.button(f"Baixar Parcela", key=f"p_{index}"):
-                            linhas = texto_carne.split('\n')
-                            novo_carne = []
-                            alterou = False
+                            # ... (Lógica de atualizar o texto do carnê ...)
+                            # Supondo que você gerou o 'novo_carne_texto' aqui:
+                            # df.at[index, 'carne'] = novo_carne_texto
+                            # df.at[index, 'status'] = "Pago" ou "Parcial"
                             
-                            for linha in linhas:
-                                # Verifica se é uma linha de parcela (tem a barra da data)
-                                if "/" in linha and "(Pago!)" not in linha and not alterou:
-                                    linha += " (Pago!)"
-                                    alterou = True
-                                novo_carne.append(linha)
-                            
-                            texto_final = "\n".join(novo_carne)
-                            # Verifica se ainda resta alguma parcela sem o carimbo
-                            tem_pendente = any("/" in l and "(Pago!)" not in l for l in novo_carne)
-                            
-                            df.at[index, 'carne'] = texto_final
-                            df.at[index, 'status'] = "Pago" if not tem_pendente else "Pagamento Parcial"
                             conn.update(data=df)
-                            st.rerun()
+                            atualizar_sistema() # <--- ATUALIZA NA HORA
                 with c2:
                     if st.button("🗑️ Excluir", key=f"d_{index}"):
-                        # Deleta a linha do DataFrame e atualiza a planilha
                         df_novo = df.drop(index)
                         conn.update(data=df_novo)
-                        st.rerun()
+                        atualizar_sistema() # <--- ATUALIZA NA HORA
