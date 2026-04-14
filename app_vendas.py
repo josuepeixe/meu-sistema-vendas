@@ -29,16 +29,11 @@ def atualizar_sistema():
 
 # --- LÓGICA DE ARREDONDAMENTO (SEM CENTAVOS) ---
 def calcular_parcelas_inteiras(total, num_p):
-    """Retorna uma lista de valores inteiros que somam o total"""
     base = int(total // num_p)
     resto = int(total % num_p)
-    
     lista_valores = []
     for i in range(num_p):
-        if i < resto:
-            lista_valores.append(base + 1)
-        else:
-            lista_valores.append(base)
+        lista_valores.append(base + 1 if i < resto else base)
     return lista_valores
 
 # --- LÓGICA DE DATAS ---
@@ -82,13 +77,11 @@ if menu == "Registrar Venda Nova":
         cliente = st.text_input("Nome do Cliente")
         valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
         frequencia = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
-        
         if frequencia == "Quinzena":
             if "opcoes_q" not in st.session_state: st.session_state.opcoes_q = calcular_opcoes_quinzena(datetime.now())
             data_p = st.radio("Primeira parcela?", options=st.session_state.opcoes_q, format_func=lambda x: x.strftime("%d/%m/%Y"))
         else:
             data_p = (datetime.now() + dateutil.relativedelta.relativedelta(months=1))
-            
     with col2:
         num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
         prod = st.text_area("Produtos")
@@ -97,45 +90,43 @@ if menu == "Registrar Venda Nova":
         if cliente and prod and valor_total:
             datas = gerar_sequencia_datas(data_p, num_p, frequencia)
             valores = calcular_parcelas_inteiras(valor_total, num_p)
-            
             complemento = " (Cartão)" if frequencia == "Cartão (Maquininha)" else ""
             carne = f"{prod}\nValor Total: R$ {valor_total:.2f}{complemento}\n\n"
-            
             for v, d in zip(valores, datas): 
                 status_parc = " (Pago!)" if frequencia == "Cartão (Maquininha)" else ""
                 carne += f"{v:.2f} {d}{status_parc}\n"
-            
             status_venda = "Pago" if frequencia == "Cartão (Maquininha)" else "Pendente"
-            
-            nova = pd.DataFrame([{
-                "id": len(df)+1, "cliente": cliente, "produtos": prod, "valor": valor_total, 
-                "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_venda
-            }])
+            nova = pd.DataFrame([{"id": len(df)+1, "cliente": cliente, "produtos": prod, "valor": valor_total, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_venda}])
             conn.update(data=pd.concat([df, nova], ignore_index=True))
             if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
             atualizar_sistema()
-        else:
-            st.error("Preencha todos os campos obrigatórios.")
 
-# --- 2. IMPORTAR VENDA EM ANDAMENTO ---
+# --- 2. IMPORTAR VENDA EM ANDAMENTO (CORRIGIDO) ---
 elif menu == "Importar Venda em Andamento":
     st.subheader("📥 Importar Vendas do Caderno")
     col1, col2 = st.columns(2)
     with col1:
         c_nome = st.text_input("Nome do Cliente")
-        c_valor = st.number_input("Valor Total da Venda (R$)", min_value=0.0, step=1.0)
+        c_valor = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0)
         c_data_original = st.date_input("Data original da compra", datetime.now())
     with col2:
         c_total_p = st.number_input("Total de parcelas", min_value=1, value=1)
-        c_pagas_p = st.number_input("Quantas parcelas JÁ PAGOU?", min_value=0, max_value=int(c_total_p), value=0)
+        c_pagas_p = st.number_input("Quantas JÁ PAGOU?", min_value=0, max_value=int(c_total_p), value=0)
         c_prod = st.text_area("Produtos")
 
+    st.write("---")
+    st.write("📅 **Datas das Parcelas (Ordem Correta):**")
+    
     datas_manuais = []
-    cols_datas = st.columns(3)
-    for i in range(int(c_total_p)):
-        with cols_datas[i % 3]:
-            d = st.date_input(f"Data Parcela {i+1}", datetime.now() + timedelta(days=i*15), key=f"date_{i}")
-            datas_manuais.append(d.strftime("%d/%m"))
+    # CORREÇÃO: Loop que cria linhas de colunas para manter a ordem 1, 2, 3...
+    for i in range(0, int(c_total_p), 3):
+        cols = st.columns(3)
+        for j in range(3):
+            idx = i + j
+            if idx < int(c_total_p):
+                with cols[j]:
+                    d = st.date_input(f"Data Parcela {idx+1}", datetime.now() + timedelta(days=idx*15), key=f"imp_{idx}")
+                    datas_manuais.append(d.strftime("%d/%m"))
 
     if st.button("📥 Importar para o Sistema", type="primary"):
         if c_nome and c_prod and c_valor > 0:
@@ -149,14 +140,14 @@ elif menu == "Importar Venda em Andamento":
             conn.update(data=pd.concat([df, nova], ignore_index=True))
             atualizar_sistema()
 
-# --- 3. HISTÓRICO E DASHBOARD ---
+# --- 3. HISTÓRICO E DASHBOARD QUINZENAL ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now()
-    mes_atual, ano_atual = hoje.month, hoje.year
-    if hoje.day <= 15: inicio, fim = 1, 15
-    else: inicio, fim = 16, calendar.monthrange(ano_atual, mes_atual)[1]
+    mes_at, ano_at = hoje.month, hoje.year
+    if hoje.day <= 15: ini, fim, txt = 1, 15, f"01/{mes_at:02d} a 15/{mes_at:02d}"
+    else: ini, fim = 16, calendar.monthrange(ano_at, mes_at)[1]; txt = f"16/{mes_at:02d} a {fim}/{mes_at:02d}"
 
-    st.subheader(f"📊 Resumo Quinzena ({inicio:02d} a {fim:02d}/{mes_atual:02d})")
+    st.subheader(f"📊 Resumo Quinzena ({txt})")
     vol, rec = 0.0, 0.0
     if not df.empty:
         for _, row in df.iterrows():
@@ -166,12 +157,12 @@ elif menu == "Histórico de Vendas":
                         p = linha.split()
                         v = float(p[0].replace(',', '.'))
                         d, m = int(p[1].split('/')[0]), int(p[1].split('/')[1])
-                        if m == mes_atual and inicio <= d <= fim:
+                        if m == mes_at and ini <= d <= fim:
                             vol += v
                             if "(Pago!)" in linha: rec += v
                     except: continue
         m1, m2, m3 = st.columns(3)
-        m1.metric("Parcelas no Período", f"R$ {vol:.2f}")
+        m1.metric("Parcelas na Quinzena", f"R$ {vol:.2f}")
         m2.metric("Recebido", f"R$ {rec:.2f}")
         m3.metric("A Receber", f"R$ {vol-rec:.2f}", delta_color="inverse")
     
@@ -181,8 +172,7 @@ elif menu == "Histórico de Vendas":
     
     if not df.empty:
         df_f = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
-        if filtro_status != "Todos":
-            df_f = df_f[df_f['status'] == filtro_status]
+        if filtro_status != "Todos": df_f = df_f[df_f['status'] == filtro_status]
             
         for index, row in df_f.iterrows():
             if not row['cliente'] or str(row['cliente']).lower() == "nan": continue
@@ -203,12 +193,17 @@ elif menu == "Histórico de Vendas":
                             df.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(data=df); atualizar_sistema()
                 with c_btn[1]:
-                    msg_txt = "comprovante de pagamento" if row['status'] == "Pago" else "resumo da sua compra"
-                    msg = f"Olá {row['cliente']}! Segue o {msg_txt}:\n\n{row['carne']}"
+                    msg = f"Olá {row['cliente']}! Segue o resumo:\n\n{row['carne']}"
                     st.link_button("🟢 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(data=df.drop(index)); atualizar_sistema()
+
+# --- CRÉDITOS ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛠️ Créditos")
+st.sidebar.markdown("**Análise e Desenvolvimento:** \nJosué Peixe")
+st.sidebar.markdown("[🔗 Meu Perfil no LinkedIn](https://www.linkedin.com/in/josue-peixe-36b1a3237/)")
 
 # --- CRÉDITOS NA BARRA LATERAL ---
 st.sidebar.markdown("---") # Adiciona uma linha horizontal para separar dos filtros
