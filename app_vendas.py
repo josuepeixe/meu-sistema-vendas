@@ -3,6 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 import dateutil.relativedelta
+from datetime import datetime, timedelta
 
 # Configuração da página
 st.set_page_config(page_title="Gestão de Vendas Pro", layout="wide", page_icon="🛍️")
