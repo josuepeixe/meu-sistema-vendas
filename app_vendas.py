@@ -86,12 +86,30 @@ if menu == "Registrar Venda":
         frequencia = st.radio("Frequência", ["Mensal", "Quinzena"])
         
         # Escolha da quinzena (conforme lógica anterior)
+        # --- Lógica de Quinzena com "Memória" (Session State) ---
+        data_primeira_parcela = None
         if frequencia == "Quinzena":
-            opt1, opt2 = (datetime.now().replace(day=15), (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(day=1))
-            data_final = st.radio("Data inicial", options=[opt1, opt2], format_func=lambda x: x.strftime("%d/%m"), key="q_in")
-        else:
-            data_final = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+            # 1. Calculamos as opções apenas UMA VEZ e guardamos na memória
+            if "opcoes_quinzena" not in st.session_state:
+                hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                opt1, opt2 = calcular_opcoes_quinzena(hoje)
+                st.session_state.opcoes_quinzena = [opt1, opt2]
 
+            # 2. O rádio agora usa as opções que estão "congeladas" na memória
+            # O 'key' é essencial para o Streamlit não resetar o componente
+            escolha_data = st.radio(
+                "Quando será a primeira parcela?",
+                options=st.session_state.opcoes_quinzena,
+                format_func=lambda x: x.strftime("%d/%m/%Y"),
+                key="radio_quinzena_fixo" 
+            )
+            data_primeira_parcela = escolha_data
+        else:
+            # Se mudar para Mensal, limpamos as opções da memória para que sejam 
+            # recalculadas caso você volte para Quinzena depois
+            if "opcoes_quinzena" in st.session_state:
+                del st.session_state.opcoes_quinzena
+            data_primeira_parcela = (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     with col2:
         num_parcelas = st.number_input("Nº Parcelas", min_value=1, value=1)
         produtos = st.text_area("Produtos", value=st.session_state.produtos_input, key="p_in")
@@ -113,6 +131,12 @@ if menu == "Registrar Venda":
             atualizar_sistema() # <--- AQUI ESTÁ A MÁGICA
         else:
             st.error("Preencha tudo!")
+
+        if "opcoes_quinzena" in st.session_state:
+                del st.session_state.opcoes_quinzena
+            
+            st.success("✅ Venda registrada com sucesso!")
+            atualizar_sistema()
 
 elif menu == "Histórico de Vendas":
     st.subheader("📊 Histórico")
