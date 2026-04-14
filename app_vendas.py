@@ -190,12 +190,17 @@ elif menu == "Histórico de Vendas":
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(data=df.drop(index)); atualizar_sistema()
                         
-# --- SEÇÃO DE CRÉDITOS (RODAPÉ DA SIDEBAR) ---
-st.sidebar.markdown("---") # Linha divisória
-st.sidebar.markdown("### 🛠️ Créditos")
-st.sidebar.markdown("**Análise e Desenvolvimento:**")
-st.sidebar.write("Josué Peixe")
-
-# Substitua o link abaixo pelo link real do seu perfil
-linkedin_url = "https://www.linkedin.com/in/seu-perfil-aqui" 
-st.sidebar.markdown(f"[🔗 Meu Perfil no LinkedIn]({linkedin_url})")
+# --- CRÉDITOS NA BARRA LATERAL ---
+st.sidebar.markdown("---") # Adiciona uma linha horizontal para separar dos filtros
+st.sidebar.markdown(
+    """
+    <div style="text-align: center; padding-top: 10px; padding-bottom: 10px;">
+        <p style="font-size: 13px; color: #888; margin-bottom: 5px;">Análise e Desenvolvimento:</p>
+        <p style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">Josué Peixe</p>
+        <a href="https://www.linkedin.com/in/josu%C3%A9-peixe-94aba93a5/" target="_blank" style="text-decoration: none; color: #00A0DC; font-weight: bold;">
+            🔗 Meu Perfil no LinkedIn
+        </a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
