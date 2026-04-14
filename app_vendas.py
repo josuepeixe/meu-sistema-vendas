@@ -7,7 +7,7 @@ import urllib.parse
 import calendar
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Vendas - Master", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Gestão de Vendas", layout="wide", page_icon="🚀")
 
 # --- CONEXÃO E CACHE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -54,7 +54,7 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
     return datas
 
 # --- INTERFACE ---
-st.title("🛍️ Gestão de Vendas Master")
+st.title("🛍️ Gestão de Vendas")
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda Nova", "Importar Venda em Andamento", "Histórico de Vendas"])
 df = ler_dados_cacheado()
