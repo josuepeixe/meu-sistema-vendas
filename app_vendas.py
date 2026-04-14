@@ -30,18 +30,30 @@ def atualizar_sistema():
     st.rerun()
 
 # --- FUNÇÕES DE LÓGICA DE DATAS ---
-def calcular_opcoes_quinzena(hoje):
-    """Calcula as duas próximas datas de quinzena (01 ou 15)"""
-    hoje = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
-    if hoje.day < 15:
-        opt1 = hoje.replace(day=15)
-    else:
-        opt1 = (hoje + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+# --- FUNÇÕES DE LÓGICA DE DATAS (COM MARGEM DE 7 DIAS REAL) ---
+def calcular_opcoes_quinzena(data_referencia):
+    """Calcula as duas próximas quinzenas garantindo 7 dias de intervalo"""
+    # Define a data mínima permitida (hoje + 7 dias)
+    data_minima = data_referencia + timedelta(days=7)
+    data_minima = data_minima.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    if opt1.day == 15:
-        opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+    # Lógica para encontrar a primeira data (opt1)
+    if data_minima.day <= 1:
+        # Se a margem cair no dia 01 ou antes, a primeira opção é o dia 01 deste mês
+        opt1 = data_minima.replace(day=1)
+    elif data_minima.day <= 15:
+        # Se a margem cair entre o dia 02 e 15, a primeira opção é o dia 15 deste mês
+        opt1 = data_minima.replace(day=15)
     else:
+        # Se a margem passar do dia 15, a primeira opção é o dia 01 do próximo mês
+        opt1 = (data_minima + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+    
+    # Lógica para encontrar a segunda data (opt2) baseada na opt1
+    if opt1.day == 1:
         opt2 = opt1.replace(day=15)
+    else:
+        opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+        
     return opt1, opt2
 
 def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
