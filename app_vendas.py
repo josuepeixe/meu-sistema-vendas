@@ -189,3 +189,13 @@ elif menu == "Histórico de Vendas":
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(data=df.drop(index)); atualizar_sistema()
+                        
+# --- SEÇÃO DE CRÉDITOS (RODAPÉ DA SIDEBAR) ---
+st.sidebar.markdown("---") # Linha divisória
+st.sidebar.markdown("### 🛠️ Créditos")
+st.sidebar.markdown("**Análise e Desenvolvimento:**")
+st.sidebar.write("Josué Peixe")
+
+# Substitua o link abaixo pelo link real do seu perfil
+linkedin_url = "https://www.linkedin.com/in/seu-perfil-aqui" 
+st.sidebar.markdown(f"[🔗 Meu Perfil no LinkedIn]({linkedin_url})")
