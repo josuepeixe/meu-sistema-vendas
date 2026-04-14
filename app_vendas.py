@@ -12,9 +12,13 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def ler_dados():
     try:
-        return conn.read(ttl=0)
-    except:
-        # Caso a planilha esteja vazia ou sem cabeçalho
+        data = conn.read(ttl=0)
+        # Remove linhas que estão totalmente vazias na planilha
+        data = data.dropna(how='all')
+        # Transforma qualquer buraco (NaN) em texto vazio ""
+        return data.fillna("") 
+    except Exception as e:
+        st.error(f"Erro ao ler planilha: {e}")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def calcular_opcoes_quinzena(hoje):
@@ -134,30 +138,45 @@ elif menu == "Histórico de Vendas":
     busca = st.text_input("🔍 Buscar Cliente")
     
     if not df.empty:
-        df_filtrado = df[df['cliente'].str.contains(busca, case=False)] if busca else df
+        # Filtramos o que não é vazio e o que bate com a busca
+        df_filtrado = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
         
         for index, row in df_filtrado.iterrows():
+            # SEGURANÇA: Se o cliente estiver vazio, pula para a próxima linha
+            if not row['cliente'] or str(row['cliente']).lower() == "nan":
+                continue
+                
             status_cor = "🔴" if row['status'] == "Pendente" else "🟢"
             if row['status'] == "Pagamento Parcial": status_cor = "🔵"
             
+            # Forçamos o carnê a ser string. Se for vazio, vira ""
+            texto_carne = str(row['carne']) if row['carne'] else ""
+            
+            # Se por acaso o carnê ainda for a palavra "nan", limpamos
+            if texto_carne.lower() == "nan":
+                texto_carne = "Carnê não gerado ou vazio."
+
             with st.expander(f"{status_cor} {row['cliente']} - Criado em: {row['data']}"):
-                st.code(row['carne'], language="text")
+                st.code(texto_carne, language="text")
                 
                 c1, c2 = st.columns([1, 4])
                 with c1:
-                    if "(Pago!)" not in row['carne'] or row['status'] != "Pago":
+                    # Trava de segurança: só tenta pagar se houver um carnê válido
+                    if texto_carne != "Carnê não gerado ou vazio." and row['status'] != "Pago":
                         if st.button(f"Baixar Parcela", key=f"p_{index}"):
-                            linhas = row['carne'].split('\n')
+                            linhas = texto_carne.split('\n')
                             novo_carne = []
                             alterou = False
                             
                             for linha in linhas:
+                                # Verifica se é uma linha de parcela (tem a barra da data)
                                 if "/" in linha and "(Pago!)" not in linha and not alterou:
                                     linha += " (Pago!)"
                                     alterou = True
                                 novo_carne.append(linha)
                             
                             texto_final = "\n".join(novo_carne)
+                            # Verifica se ainda resta alguma parcela sem o carimbo
                             tem_pendente = any("/" in l and "(Pago!)" not in l for l in novo_carne)
                             
                             df.at[index, 'carne'] = texto_final
@@ -166,6 +185,7 @@ elif menu == "Histórico de Vendas":
                             st.rerun()
                 with c2:
                     if st.button("🗑️ Excluir", key=f"d_{index}"):
-                        df = df.drop(index)
-                        conn.update(data=df)
+                        # Deleta a linha do DataFrame e atualiza a planilha
+                        df_novo = df.drop(index)
+                        conn.update(data=df_novo)
                         st.rerun()
