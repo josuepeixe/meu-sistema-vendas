@@ -7,7 +7,7 @@ import urllib.parse
 import calendar
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Vendas", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_icon="🚀")
 
 # --- CONEXÃO E CACHE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -27,7 +27,21 @@ def atualizar_sistema():
     st.cache_data.clear()
     st.rerun()
 
-# --- LÓGICA DE DATAS AUTOMÁTICAS ---
+# --- LÓGICA DE ARREDONDAMENTO (SEM CENTAVOS) ---
+def calcular_parcelas_inteiras(total, num_p):
+    """Retorna uma lista de valores inteiros que somam o total"""
+    base = int(total // num_p)
+    resto = int(total % num_p)
+    
+    lista_valores = []
+    for i in range(num_p):
+        if i < resto:
+            lista_valores.append(base + 1)
+        else:
+            lista_valores.append(base)
+    return lista_valores
+
+# --- LÓGICA DE DATAS ---
 def calcular_opcoes_quinzena(data_referencia):
     data_minima = data_referencia + timedelta(days=7)
     data_minima = data_minima.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -46,7 +60,8 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
         if i == 0:
             datas.append(data_atual.strftime("%d/%m"))
             continue
-        if frequencia == "Mensal": data_atual = data_atual + dateutil.relativedelta.relativedelta(months=1)
+        if frequencia in ["Mensal", "Cartão (Maquininha)"]: 
+            data_atual = data_atual + dateutil.relativedelta.relativedelta(months=1)
         else:
             if data_atual.day == 1: data_atual = data_atual.replace(day=15)
             else: data_atual = (data_atual + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
@@ -54,59 +69,67 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
     return datas
 
 # --- INTERFACE ---
-st.title("🛍️ Gestão de Vendas")
+st.title("🛍️ Gestão de Vendas Master")
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda Nova", "Importar Venda em Andamento", "Histórico de Vendas"])
 df = ler_dados_cacheado()
 
-# --- 1. REGISTRO DE VENDA NOVA (LÓGICA ANTERIOR) ---
+# --- 1. REGISTRO DE VENDA NOVA ---
 if menu == "Registrar Venda Nova":
     st.subheader("📝 Novo Registro Automático")
     col1, col2 = st.columns(2)
     with col1:
         cliente = st.text_input("Nome do Cliente")
-        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, value=None)
-        frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"])
+        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
+        frequencia = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
+        
         if frequencia == "Quinzena":
             if "opcoes_q" not in st.session_state: st.session_state.opcoes_q = calcular_opcoes_quinzena(datetime.now())
             data_p = st.radio("Primeira parcela?", options=st.session_state.opcoes_q, format_func=lambda x: x.strftime("%d/%m/%Y"))
         else:
             data_p = (datetime.now() + dateutil.relativedelta.relativedelta(months=1))
+            
     with col2:
         num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
         prod = st.text_area("Produtos")
 
-    if st.button("🚀 Salvar Venda"):
+    if st.button("🚀 Salvar Venda", type="primary"):
         if cliente and prod and valor_total:
             datas = gerar_sequencia_datas(data_p, num_p, frequencia)
-            v_parc = valor_total / num_p
-            carne = f"{prod}\nValor Total: R$ {valor_total:.2f}\n\n"
-            for d in datas: carne += f"{v_parc:.2f} {d}\n"
+            valores = calcular_parcelas_inteiras(valor_total, num_p)
             
-            nova = pd.DataFrame([{"id": len(df)+1, "cliente": cliente, "produtos": prod, "valor": valor_total, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": "Pendente"}])
+            complemento = " (Cartão)" if frequencia == "Cartão (Maquininha)" else ""
+            carne = f"{prod}\nValor Total: R$ {valor_total:.2f}{complemento}\n\n"
+            
+            for v, d in zip(valores, datas): 
+                status_parc = " (Pago!)" if frequencia == "Cartão (Maquininha)" else ""
+                carne += f"{v:.2f} {d}{status_parc}\n"
+            
+            status_venda = "Pago" if frequencia == "Cartão (Maquininha)" else "Pendente"
+            
+            nova = pd.DataFrame([{
+                "id": len(df)+1, "cliente": cliente, "produtos": prod, "valor": valor_total, 
+                "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_venda
+            }])
             conn.update(data=pd.concat([df, nova], ignore_index=True))
             if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
             atualizar_sistema()
+        else:
+            st.error("Preencha todos os campos obrigatórios.")
 
-# --- 2. IMPORTAR VENDA EM ANDAMENTO (NOVA FUNÇÃO PESADA) ---
+# --- 2. IMPORTAR VENDA EM ANDAMENTO ---
 elif menu == "Importar Venda em Andamento":
     st.subheader("📥 Importar Vendas do Caderno")
-    st.info("Use esta função para cadastrar vendas que já começaram e definir datas manualmente.")
-    
     col1, col2 = st.columns(2)
     with col1:
         c_nome = st.text_input("Nome do Cliente")
-        c_valor = st.number_input("Valor Total da Venda (R$)", min_value=0.0, step=0.01)
+        c_valor = st.number_input("Valor Total da Venda (R$)", min_value=0.0, step=1.0)
         c_data_original = st.date_input("Data original da compra", datetime.now())
     with col2:
-        c_total_p = st.number_input("Total de parcelas combinadas", min_value=1, value=1)
-        c_pagas_p = st.number_input("Quantas parcelas ELA JÁ PAGOU?", min_value=0, max_value=int(c_total_p), value=0)
-        c_prod = st.text_area("Produtos vendidos")
+        c_total_p = st.number_input("Total de parcelas", min_value=1, value=1)
+        c_pagas_p = st.number_input("Quantas parcelas JÁ PAGOU?", min_value=0, max_value=int(c_total_p), value=0)
+        c_prod = st.text_area("Produtos")
 
-    st.write("---")
-    st.write("📅 **Defina as datas de cada parcela (mesmo as que já foram pagas):**")
-    
-    # Criamos colunas dinâmicas para as datas das parcelas
     datas_manuais = []
     cols_datas = st.columns(3)
     for i in range(int(c_total_p)):
@@ -116,27 +139,18 @@ elif menu == "Importar Venda em Andamento":
 
     if st.button("📥 Importar para o Sistema", type="primary"):
         if c_nome and c_prod and c_valor > 0:
-            v_parc = c_valor / c_total_p
+            valores = calcular_parcelas_inteiras(c_valor, c_total_p)
             carne = f"{c_prod}\nValor Total: R$ {c_valor:.2f}\n\n"
-            
-            for i, d_str in enumerate(datas_manuais):
+            for i, (v, d_str) in enumerate(zip(valores, datas_manuais)):
                 pago_str = " (Pago!)" if i < c_pagas_p else ""
-                carne += f"{v_parc:.2f} {d_str}{pago_str}\n"
-            
+                carne += f"{v:.2f} {d_str}{pago_str}\n"
             status = "Pago" if c_pagas_p == c_total_p else ("Pagamento Parcial" if c_pagas_p > 0 else "Pendente")
-            
-            nova = pd.DataFrame([{
-                "id": len(df)+1, "cliente": c_nome, "produtos": c_prod, "valor": c_valor, 
-                "data": c_data_original.strftime("%d/%m/%Y"), "carne": carne, "status": status
-            }])
-            
+            nova = pd.DataFrame([{"id": len(df)+1, "cliente": c_nome, "produtos": c_prod, "valor": c_valor, "data": c_data_original.strftime("%d/%m/%Y"), "carne": carne, "status": status}])
             conn.update(data=pd.concat([df, nova], ignore_index=True))
-            st.success(f"Venda de {c_nome} importada com sucesso!")
             atualizar_sistema()
 
 # --- 3. HISTÓRICO E DASHBOARD ---
 elif menu == "Histórico de Vendas":
-    # Lógica do Dashboard (mantida a anterior)
     hoje = datetime.now()
     mes_atual, ano_atual = hoje.month, hoje.year
     if hoje.day <= 15: inicio, fim = 1, 15
@@ -163,8 +177,13 @@ elif menu == "Histórico de Vendas":
     
     st.divider()
     busca = st.text_input("🔍 Buscar Cliente")
+    filtro_status = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
+    
     if not df.empty:
         df_f = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
+        if filtro_status != "Todos":
+            df_f = df_f[df_f['status'] == filtro_status]
+            
         for index, row in df_f.iterrows():
             if not row['cliente'] or str(row['cliente']).lower() == "nan": continue
             status_cor = "🔴" if row['status'] == "Pendente" else ("🟢" if row['status'] == "Pago" else "🔵")
@@ -184,23 +203,15 @@ elif menu == "Histórico de Vendas":
                             df.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(data=df); atualizar_sistema()
                 with c_btn[1]:
-                    msg = f"Olá {row['cliente']}! Segue o resumo:\n\n{row['carne']}"
+                    msg_txt = "comprovante de pagamento" if row['status'] == "Pago" else "resumo da sua compra"
+                    msg = f"Olá {row['cliente']}! Segue o {msg_txt}:\n\n{row['carne']}"
                     st.link_button("🟢 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(data=df.drop(index)); atualizar_sistema()
-                        
-# --- CRÉDITOS NA BARRA LATERAL ---
-st.sidebar.markdown("---") # Adiciona uma linha horizontal para separar dos filtros
-st.sidebar.markdown(
-    """
-    <div style="text-align: center; padding-top: 10px; padding-bottom: 10px;">
-        <p style="font-size: 13px; color: #888; margin-bottom: 5px;">Análise e Desenvolvimento:</p>
-        <p style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">Josué Peixe</p>
-        <a href="https://www.linkedin.com/in/josu%C3%A9-peixe-94aba93a5/" target="_blank" style="text-decoration: none; color: #00A0DC; font-weight: bold;">
-            🔗 Meu Perfil no LinkedIn
-        </a>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+
+# --- CRÉDITOS ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🛠️ Créditos")
+st.sidebar.markdown("**Análise e Desenvolvimento:** \nJosué Peixe")
+st.sidebar.markdown("[🔗 Meu Perfil no LinkedIn](https://www.linkedin.com/in/josue-peixe-36b1a3237/)")
