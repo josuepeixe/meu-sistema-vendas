@@ -125,18 +125,18 @@ if menu == "Registrar Venda":
             
             # SALVAR E ATUALIZAR AUTOMATICAMENTE
             conn.update(data=pd.concat([df, nova_venda], ignore_index=True))
+            if "opcoes_quinzena" in st.session_state:
+                del st.session_state.opcoes_quinzena
+            
+            st.success("✅ Venda registrada com sucesso!")
+            atualizar_sistema()
+            
             st.session_state.cliente_input = "" # Limpa campos
             st.session_state.produtos_input = ""
             st.success("Salvo!")
             atualizar_sistema() # <--- AQUI ESTÁ A MÁGICA
         else:
             st.error("Preencha tudo!")
-
-        if "opcoes_quinzena" in st.session_state:
-                del st.session_state.opcoes_quinzena
-            
-            st.success("✅ Venda registrada com sucesso!")
-            atualizar_sistema()
 
 elif menu == "Histórico de Vendas":
     st.subheader("📊 Histórico")
