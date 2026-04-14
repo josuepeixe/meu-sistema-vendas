@@ -62,38 +62,46 @@ df = ler_dados()
 if menu == "Registrar Venda":
     st.subheader("📝 Novo Registro de Venda")
     
-    with st.form("form_venda", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            cliente = st.text_input("Nome do Cliente")
-            valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01)
-            frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"])
-            
-            # Lógica extra para Quinzena
-            data_primeira_parcela = None
-            if frequencia == "Quinzena":
-                opt1, opt2 = calcular_opcoes_quinzena(datetime.now())
-                escolha_data = st.radio(
-                    "Quando será a primeira parcela?",
-                    options=[opt1, opt2],
-                    format_func=lambda x: x.strftime("%d/%m/%Y")
-                )
-                data_primeira_parcela = escolha_data
-            else:
-                # Se mensal, a primeira parcela é daqui a 30 dias (mesmo dia do mês que vem)
-                data_primeira_parcela = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+    # Inicializamos os campos no estado da sessão para podermos limpá-los manualmente
+    if "cliente_input" not in st.session_state:
+        st.session_state.cliente_input = ""
+    if "valor_input" not in st.session_state:
+        st.session_state.valor_input = 0.0
+    if "produtos_input" not in st.session_state:
+        st.session_state.produtos_input = ""
 
-        with col2:
-            num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1)
-            produtos = st.text_area("Produtos (ex: 1 kit essencial)")
-
-        submit = st.form_submit_button("Gerar Venda e Carnê")
+    # Campos de entrada
+    col1, col2 = st.columns(2)
+    with col1:
+        cliente = st.text_input("Nome do Cliente", value=st.session_state.cliente_input, key="c_in")
+        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, value=st.session_state.valor_input, key="v_in")
         
-        if submit and cliente and produtos:
+        # O rádio de frequência agora reage INSTANTANEAMENTE
+        frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"])
+        
+        data_primeira_parcela = None
+        if frequencia == "Quinzena":
+            opt1, opt2 = calcular_opcoes_quinzena(datetime.now())
+            # Agora as opções aparecem assim que você clica em 'Quinzena'
+            escolha_data = st.radio(
+                "Quando será a primeira parcela?",
+                options=[opt1, opt2],
+                format_func=lambda x: x.strftime("%d/%m/%Y")
+            )
+            data_primeira_parcela = escolha_data
+        else:
+            data_primeira_parcela = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+
+    with col2:
+        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1)
+        produtos = st.text_area("Produtos (ex: 1 kit essencial)", value=st.session_state.produtos_input, key="p_in")
+
+    # Botão de salvar fora de um formulário
+    if st.button("🚀 Registrar Venda e Gerar Carnê", type="primary"):
+        if cliente and produtos and valor_total > 0:
             lista_datas = gerar_sequencia_datas(data_primeira_parcela, num_parcelas, frequencia)
             valor_p = valor_total / num_parcelas
             
-            # Montagem do carnê conforme seu modelo
             carne_texto = f"{produtos} {valor_total:.2f}\n\n"
             for d in lista_datas:
                 carne_texto += f"{valor_p:.2f} {d}\n"
@@ -108,10 +116,21 @@ if menu == "Registrar Venda":
                 "status": "Pendente"
             }])
             
+            # Salvar no Google Sheets
             df_atualizado = pd.concat([df, nova_venda], ignore_index=True)
             conn.update(data=df_atualizado)
-            st.success("Venda registrada! O carnê foi gerado com as datas escolhidas.")
+            
+            st.success("✅ Venda registrada com sucesso!")
+            
+            # Limpamos os campos manualmente após o sucesso
+            st.session_state.cliente_input = ""
+            st.session_state.valor_input = 0.0
+            st.session_state.produtos_input = ""
+            
+            # Força a atualização da tela para limpar os campos
             st.rerun()
+        else:
+            st.error("⚠️ Por favor, preencha o nome, produtos e valor antes de salvar.")
 
 elif menu == "Histórico de Vendas":
     st.subheader("📊 Histórico e Baixas")
