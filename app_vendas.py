@@ -18,14 +18,15 @@ def ler_dados():
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def calcular_opcoes_quinzena(hoje):
-    """Calcula as duas próximas datas possíveis (01 ou 15)"""
-    # Opção 1: Próxima quinzena imediata
+    """Calcula as duas próximas datas possíveis (01 ou 15) ignorando as horas"""
+    # Remove horas, minutos e segundos para a opção não "mudar" a cada segundo
+    hoje = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
+    
     if hoje.day < 15:
         opt1 = hoje.replace(day=15)
     else:
         opt1 = (hoje + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
     
-    # Opção 2: A quinzena depois da opt1
     if opt1.day == 15:
         opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
     else:
@@ -62,44 +63,43 @@ df = ler_dados()
 if menu == "Registrar Venda":
     st.subheader("📝 Novo Registro de Venda")
     
-    # Inicializamos os campos no estado da sessão para podermos limpá-los manualmente
-    if "cliente_input" not in st.session_state:
-        st.session_state.cliente_input = ""
-    if "valor_input" not in st.session_state:
-        st.session_state.valor_input = 0.0
-    if "produtos_input" not in st.session_state:
-        st.session_state.produtos_input = ""
+    if "cliente_input" not in st.session_state: st.session_state.cliente_input = ""
+    if "valor_input" not in st.session_state: st.session_state.valor_input = 0.0
+    if "produtos_input" not in st.session_state: st.session_state.produtos_input = ""
 
-    # Campos de entrada
     col1, col2 = st.columns(2)
     with col1:
         cliente = st.text_input("Nome do Cliente", value=st.session_state.cliente_input, key="c_in")
         valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=0.01, value=st.session_state.valor_input, key="v_in")
-        
-        # O rádio de frequência agora reage INSTANTANEAMENTE
-        frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"])
+        frequencia = st.radio("Frequência de Pagamento", ["Mensal", "Quinzena"], key="freq_selector")
         
         data_primeira_parcela = None
         if frequencia == "Quinzena":
-            opt1, opt2 = calcular_opcoes_quinzena(datetime.now())
-            # Agora as opções aparecem assim que você clica em 'Quinzena'
+            # Aqui calculamos as opções baseadas apenas na data de hoje (sem horas)
+            opcoes = calcular_opcoes_quinzena(datetime.now())
+            
+            # O 'key' garante que o Streamlit lembre qual você marcou
             escolha_data = st.radio(
                 "Quando será a primeira parcela?",
-                options=[opt1, opt2],
-                format_func=lambda x: x.strftime("%d/%m/%Y")
+                options=opcoes,
+                format_func=lambda x: x.strftime("%d/%m/%Y"),
+                key="escolha_quinzena" 
             )
             data_primeira_parcela = escolha_data
         else:
-            data_primeira_parcela = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+            # Para mensal, também fixamos a data sem horas
+            data_primeira_parcela = (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     with col2:
-        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1)
+        num_parcelas = st.number_input("Nº de Parcelas", min_value=1, max_value=24, value=1, key="n_parc")
         produtos = st.text_area("Produtos (ex: 1 kit essencial)", value=st.session_state.produtos_input, key="p_in")
 
-    # Botão de salvar fora de um formulário
     if st.button("🚀 Registrar Venda e Gerar Carnê", type="primary"):
         if cliente and produtos and valor_total > 0:
-            lista_datas = gerar_sequencia_datas(data_primeira_parcela, num_parcelas, frequencia)
+            # Usamos a data que está salva no estado da escolha do rádio
+            data_final = data_primeira_parcela
+            
+            lista_datas = gerar_sequencia_datas(data_final, num_parcelas, frequencia)
             valor_p = valor_total / num_parcelas
             
             carne_texto = f"{produtos} {valor_total:.2f}\n\n"
@@ -116,21 +116,18 @@ if menu == "Registrar Venda":
                 "status": "Pendente"
             }])
             
-            # Salvar no Google Sheets
             df_atualizado = pd.concat([df, nova_venda], ignore_index=True)
             conn.update(data=df_atualizado)
             
             st.success("✅ Venda registrada com sucesso!")
             
-            # Limpamos os campos manualmente após o sucesso
+            # Resetamos os campos
             st.session_state.cliente_input = ""
             st.session_state.valor_input = 0.0
             st.session_state.produtos_input = ""
-            
-            # Força a atualização da tela para limpar os campos
             st.rerun()
         else:
-            st.error("⚠️ Por favor, preencha o nome, produtos e valor antes de salvar.")
+            st.error("⚠️ Preencha os campos obrigatórios.")
 
 elif menu == "Histórico de Vendas":
     st.subheader("📊 Histórico e Baixas")
