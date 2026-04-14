@@ -12,13 +12,19 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def ler_dados():
     try:
-        data = conn.read(ttl=0)
-        # Remove linhas que estão totalmente vazias na planilha
-        data = data.dropna(how='all')
-        # Transforma qualquer buraco (NaN) em texto vazio ""
-        return data.fillna("") 
+        # Mudamos ttl de 0 para 10. 
+        # Isso significa que o Google só será consultado 1 vez a cada 10 segundos,
+        # economizando sua cota e evitando o erro 429.
+        data = conn.read(ttl=10) 
+        if data is not None:
+            data = data.dropna(how='all')
+            return data.fillna("")
+        return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
     except Exception as e:
-        st.error(f"Erro ao ler planilha: {e}")
+        if "429" in str(e):
+            st.error("⚠️ O Google pediu um descanso! Aguarde 30 segundos e tente novamente.")
+        else:
+            st.error(f"Erro ao ler planilha: {e}")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
 def calcular_opcoes_quinzena(hoje):
@@ -58,8 +64,13 @@ def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
         datas.append(data_atual.strftime("%d/%m"))
     return datas
 
-# --- INTERFACE ---
+# --- NA PARTE DO MENU LATERAL ---
 st.title("🛍️ Controle de Vendas - Revendedora")
+
+# Adicione um botão de atualizar no topo da barra lateral
+if st.sidebar.button("🔄 Forçar Atualização"):
+    st.cache_data.clear() # Limpa o cache do Streamlit
+    st.rerun()
 
 menu = st.sidebar.selectbox("Menu", ["Registrar Venda", "Histórico de Vendas"])
 df = ler_dados()
