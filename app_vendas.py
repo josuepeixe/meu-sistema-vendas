@@ -98,13 +98,11 @@ if menu == "Registrar Venda Nova":
 
         if st.button("🚀 Salvar Venda", type="primary"):
             if cliente_sel and prod and valor_t:
-                # Gerar carnê
                 valores = calcular_parcelas_inteiras(valor_t, int(num_p))
                 carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
                 for i, v in enumerate(valores):
                     data_f = (data_p + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
                     carne += f"{v:.2f} {data_f}\n"
-                
                 nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": "Pendente"}])
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
                 atualizar_sistema()
@@ -174,47 +172,66 @@ elif menu == "Registrar Cliente":
                     df_clientes.at[idx_c, 'info'] = new_info
                     conn.update(worksheet="clientes", data=df_clientes.astype(str)); atualizar_sistema()
 
-# --- 4. HISTÓRICO DE VENDAS (VERSÃO BLINDADA CONTRA CHAVES DUPLICADAS) ---
+# --- 4. HISTÓRICO DE VENDAS ---
 elif menu == "Histórico de Vendas":
-    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    hoje = datetime.now()
+    mes_at, ano_at = hoje.month, hoje.year
+    ini_q, fim_q = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
     
+    # 🚨 ALERTAS DE COBRANÇA
     st.subheader("🚨 Alertas de Cobrança")
     alertas_found = False
     if not df_vendas.empty:
-        # Usamos enumerate para garantir que cada alerta também tenha uma chave única
         for idx_alerta, (index, row) in enumerate(df_vendas.iterrows()):
             carne = str(row['carne'])
             for linha in carne.split('\n'):
                 if "/" in linha and "(Pago!)" not in linha:
                     try:
-                        p = linha.split(); v_p = p[0]; d_p, m_p = map(int, p[1].split('/'))
+                        p = linha.split(); d_p, m_p = map(int, p[1].split('/'))
                         dt_p = datetime(2026, m_p, d_p)
-                        if dt_p <= hoje:
+                        if dt_p <= hoje.replace(hour=0, minute=0, second=0, microsecond=0):
                             alertas_found = True
-                            st.warning(f"Atraso: {row['cliente']} (R$ {v_p})")
+                            st.warning(f"Atraso: {row['cliente']} (R$ {p[0]})")
                     except: continue
     if not alertas_found: st.success("✅ Tudo em dia!")
 
     st.divider()
-    busca = st.text_input("🔍 Buscar Cliente")
+
+    # 📊 RELATÓRIO FINANCEIRO (AQUI ESTÁ ELE!)
+    st.subheader(f"📊 Resumo Financeiro da Quinzena ({ini_q:02d} a {fim_q:02d}/{mes_at:02d})")
+    vol, rec = 0.0, 0.0
+    if not df_vendas.empty:
+        for _, row in df_vendas.iterrows():
+            for linha in str(row['carne']).split('\n'):
+                if "/" in linha:
+                    try:
+                        p = linha.split()
+                        v = float(p[0])
+                        d, m = map(int, p[1].split('/'))
+                        if m == mes_at and ini_q <= d <= fim_q:
+                            vol += v
+                            if "(Pago!)" in linha: rec += v
+                    except: continue
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Parcelas no Período", f"R$ {vol:.2f}")
+        m2.metric("Recebido", f"R$ {rec:.2f}")
+        m3.metric("A Receber", f"R$ {vol-rec:.2f}", delta_color="inverse")
+    
+    st.divider()
+    busca = st.text_input("🔍 Buscar Cliente no Histórico")
     
     if not df_vendas.empty:
         df_f = df_vendas[df_vendas['cliente'].astype(str).str.contains(busca, case=False)] if busca else df_vendas
-        
-        # AQUI ESTÁ O SEGREDO: Usamos enumerate para ter o 'i' (posição da linha)
         for i, (index, row) in enumerate(df_f.iterrows()):
-            # A key agora combina o ID da venda com a posição 'i'
             edit_key = f"edit_mode_{row['id']}_{i}" 
             if edit_key not in st.session_state: st.session_state[edit_key] = False
 
             with st.expander(f"{row['cliente']} - R$ {row['valor']} (Venda em {row['data']})"):
-                
                 if st.session_state[edit_key]:
                     st.info("💡 Modo de edição ativo.")
-                    # Adicionamos _{i} em todas as chaves de widgets
                     novo_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
                     novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
-                    
                     col_save1, col_save2 = st.columns(2)
                     if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
                         df_vendas.at[index, 'valor'] = str(novo_valor)
@@ -227,7 +244,6 @@ elif menu == "Histórico de Vendas":
                         st.rerun()
                 else:
                     st.code(row['carne'])
-                    
                     c_h1, c_h2, c_h3, c_h4 = st.columns(4)
                     with c_h1:
                         if st.button("💰 Pagar", key=f"p_{row['id']}_{i}"):
@@ -264,8 +280,8 @@ elif menu == "Configurações Pix":
             conn.update(worksheet="config", data=df_n)
             atualizar_sistema()
 
-# --- CRÉDITOS NA BARRA LATERAL ---
-st.sidebar.markdown("---") # Adiciona uma linha horizontal para separar dos filtros
+# --- CRÉDITOS ---
+st.sidebar.markdown("---")
 st.sidebar.markdown(
     """
     <div style="text-align: center; padding-top: 10px; padding-bottom: 10px;">
