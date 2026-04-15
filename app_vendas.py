@@ -40,12 +40,12 @@ def ler_config():
         data = conn.read(worksheet="config", ttl=0)
         df = data.dropna(how='all').fillna("").astype(str)
         if df.empty:
-            return pd.DataFrame([{"chave_pix": "", "nome_pix": "", "cidade_pix": "FORTALEZA"}]).astype(str)
+            return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
         for col in df.columns:
             df[col] = df[col].apply(lambda x: str(x).replace(".0", "") if str(x).endswith(".0") else str(x))
         return df
     except:
-        return pd.DataFrame([{"chave_pix": "", "nome_pix": "", "cidade_pix": "FORTALEZA"}]).astype(str)
+        return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
 
 def atualizar_sistema():
     st.cache_data.clear()
@@ -66,6 +66,17 @@ def calcular_parcelas_inteiras(total, num_p):
     resto = total_int % num_p
     return [base + 1 if i < resto else base for i in range(num_p)]
 
+def gerar_pix_texto(chave, nome, valor):
+    msg = (
+        f"💠 *DADOS PARA PAGAMENTO PIX*\n\n"
+        f"💰 *Valor:* R$ {float(valor):.2f}\n"
+        f"👤 *Recebedor:* {nome.upper()}\n"
+        f"🔑 *Chave:* {chave}\n\n"
+        f"----------\n"
+        f"Basta usar a chave acima no seu app do banco! 😊"
+    )
+    return msg
+
 # --- NAVEGAÇÃO ---
 st.sidebar.title("Navegação")
 menu = st.sidebar.selectbox("Menu", 
@@ -78,7 +89,6 @@ df_config = ler_config()
 
 pix_chave = str(df_config.at[0, 'chave_pix']) if not df_config.empty else ""
 pix_nome = str(df_config.at[0, 'nome_pix']) if not df_config.empty else ""
-pix_cidade = str(df_config.at[0, 'cidade_pix']) if not df_config.empty else "FORTALEZA"
 
 # --- 1. REGISTRAR VENDA NOVA ---
 if menu == "Registrar Venda Nova":
@@ -109,7 +119,7 @@ if menu == "Registrar Venda Nova":
 
 # --- 2. REGISTRAR VENDA EM ANDAMENTO ---
 elif menu == "Registrar Venda em Andamento":
-    st.subheader("📥 Importar Vendas do Caderno")
+    st.subheader("📥 Importar do Caderno")
     if df_clientes.empty:
         st.warning("Cadastre um cliente primeiro!")
     else:
@@ -160,7 +170,7 @@ elif menu == "Registrar Cliente":
                     atualizar_sistema()
     with tab2:
         if not df_clientes.empty:
-            cliente_edit = st.selectbox("Selecione o cliente para editar", df_clientes['nome'].tolist())
+            cliente_edit = st.selectbox("Selecione o cliente", df_clientes['nome'].tolist())
             idx_c = df_clientes[df_clientes['nome'] == cliente_edit].index[0]
             with st.form("edit_cliente"):
                 new_nome = st.text_input("Nome", value=df_clientes.at[idx_c, 'nome'])
@@ -175,10 +185,11 @@ elif menu == "Registrar Cliente":
 # --- 4. HISTÓRICO DE VENDAS ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now()
+    hoje_check = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
     mes_at, ano_at = hoje.month, hoje.year
     ini_q, fim_q = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
     
-    # 🚨 ALERTAS DE COBRANÇA
+    # 🚨 ALERTAS
     st.subheader("🚨 Alertas de Cobrança")
     alertas_found = False
     if not df_vendas.empty:
@@ -189,30 +200,38 @@ elif menu == "Histórico de Vendas":
                     try:
                         p = linha.split(); d_p, m_p = map(int, p[1].split('/'))
                         dt_p = datetime(2026, m_p, d_p)
-                        if dt_p <= hoje.replace(hour=0, minute=0, second=0, microsecond=0):
+                        if dt_p <= hoje_check:
                             alertas_found = True
-                            st.warning(f"Atraso: {row['cliente']} (R$ {p[0]})")
+                            st.warning(f"Atraso: {row['cliente']} (R$ {p[0]} em {p[1]})")
+                            tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
+                            tel_f = str(tel_c[0]) if len(tel_c) > 0 else ""
+                            
+                            c_alt1, c_alt2 = st.columns(2)
+                            with c_alt1:
+                                msg_c = urllib.parse.quote(f"Olá {row['cliente']}! Sua parcela de R$ {p[0]} venceu em {p[1]}. Segue o resumo:\n\n{carne}")
+                                st.link_button(f"📲 Cobrar {row['cliente']}", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_c}")
+                            with c_alt2:
+                                if pix_chave:
+                                    msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, p[0]))
+                                    st.link_button("💠 Enviar Pix", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
                     except: continue
     if not alertas_found: st.success("✅ Tudo em dia!")
 
     st.divider()
 
-    # 📊 RELATÓRIO FINANCEIRO (AQUI ESTÁ ELE!)
-    st.subheader(f"📊 Resumo Financeiro da Quinzena ({ini_q:02d} a {fim_q:02d}/{mes_at:02d})")
+    # 📊 RELATÓRIO
+    st.subheader(f"📊 Fluxo da Quinzena ({ini_q:02d} a {fim_q:02d}/{mes_at:02d})")
     vol, rec = 0.0, 0.0
     if not df_vendas.empty:
         for _, row in df_vendas.iterrows():
             for linha in str(row['carne']).split('\n'):
                 if "/" in linha:
                     try:
-                        p = linha.split()
-                        v = float(p[0])
-                        d, m = map(int, p[1].split('/'))
+                        p = linha.split(); v = float(p[0]); d, m = map(int, p[1].split('/'))
                         if m == mes_at and ini_q <= d <= fim_q:
                             vol += v
                             if "(Pago!)" in linha: rec += v
                     except: continue
-        
         m1, m2, m3 = st.columns(3)
         m1.metric("Parcelas no Período", f"R$ {vol:.2f}")
         m2.metric("Recebido", f"R$ {rec:.2f}")
@@ -227,26 +246,19 @@ elif menu == "Histórico de Vendas":
             edit_key = f"edit_mode_{row['id']}_{i}" 
             if edit_key not in st.session_state: st.session_state[edit_key] = False
 
-            with st.expander(f"{row['cliente']} - R$ {row['valor']} (Venda em {row['data']})"):
+            with st.expander(f"{row['cliente']} - R$ {row['valor']}"):
                 if st.session_state[edit_key]:
-                    st.info("💡 Modo de edição ativo.")
-                    novo_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
-                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
-                    col_save1, col_save2 = st.columns(2)
-                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
+                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_{i}")
+                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_{i}")
+                    if st.button("💾 Salvar", key=f"s_{i}"):
                         df_vendas.at[index, 'valor'] = str(novo_valor)
                         df_vendas.at[index, 'carne'] = novo_carne
-                        conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                        st.session_state[edit_key] = False
-                        atualizar_sistema()
-                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}_{i}"):
-                        st.session_state[edit_key] = False
-                        st.rerun()
+                        conn.update(worksheet="vendas", data=df_vendas.astype(str)); atualizar_sistema()
                 else:
                     st.code(row['carne'])
-                    c_h1, c_h2, c_h3, c_h4 = st.columns(4)
-                    with c_h1:
-                        if st.button("💰 Pagar", key=f"p_{row['id']}_{i}"):
+                    c_h = st.columns([1, 1, 1, 1]) # Reduzido para 4 colunas (removido QR)
+                    with c_h[0]: # PAGAR
+                        if st.button("💰", key=f"p_{i}"):
                             linhas = str(row['carne']).split('\n')
                             nova_c, alt = [], False
                             for l in linhas:
@@ -256,29 +268,28 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'carne'] = "\n".join(nova_c)
                             df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str)); atualizar_sistema()
-                    with c_h2:
-                        if st.button("✏️ Editar", key=f"btn_edit_{row['id']}_{i}"):
-                            st.session_state[edit_key] = True
-                            st.rerun()
-                    with c_h3:
+                    with c_h[1]: # EDITAR
+                        if st.button("✏️", key=f"e_{i}"):
+                            st.session_state[edit_key] = True; st.rerun()
+                    with c_h[2]: # WHATS
                         tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
                         tel_f = str(tel_c[0]) if len(tel_c) > 0 else ""
-                        msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
-                        st.link_button("🟢 Whats", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
-                    with c_h4:
-                        if st.button("🗑️", key=f"del_{row['id']}_{i}"):
-                            conn.update(worksheet="vendas", data=df_vendas.drop(index).astype(str)); atualizar_sistema()
+                        msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo:\n\n{row['carne']}")
+                        st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
+                    with c_h[3]: # PIX
+                        if pix_chave:
+                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, row['valor']))
+                            st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
 
 # --- 5. CONFIGURAÇÕES PIX ---
 elif menu == "Configurações Pix":
     st.subheader("⚙️ Configurações Pix")
     with st.form("form_config"):
-        nova_chave = st.text_input("Chave Pix", value=pix_chave)
-        novo_nome = st.text_input("Nome no Banco", value=pix_nome)
+        nova_ch = st.text_input("Chave Pix", value=pix_chave)
+        novo_no = st.text_input("Nome no Banco", value=pix_nome)
         if st.form_submit_button("💾 Salvar"):
-            df_n = pd.DataFrame([{"chave_pix": str(nova_chave), "nome_pix": str(novo_nome), "cidade_pix": pix_cidade}]).astype(str)
-            conn.update(worksheet="config", data=df_n)
-            atualizar_sistema()
+            df_n = pd.DataFrame([{"chave_pix": str(nova_ch), "nome_pix": str(novo_no)}]).astype(str)
+            conn.update(worksheet="config", data=df_n); atualizar_sistema()
 
 # --- CRÉDITOS ---
 st.sidebar.markdown("---")
