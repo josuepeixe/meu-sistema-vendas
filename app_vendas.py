@@ -174,15 +174,15 @@ elif menu == "Registrar Cliente":
                     df_clientes.at[idx_c, 'info'] = new_info
                     conn.update(worksheet="clientes", data=df_clientes.astype(str)); atualizar_sistema()
 
-# --- 4. HISTÓRICO DE VENDAS (COM EDIÇÃO LIBERADA) ---
+# --- 4. HISTÓRICO DE VENDAS (VERSÃO BLINDADA CONTRA CHAVES DUPLICADAS) ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # 🚨 ALERTAS DE COBRANÇA
     st.subheader("🚨 Alertas de Cobrança")
     alertas_found = False
     if not df_vendas.empty:
-        for index, row in df_vendas.iterrows():
+        # Usamos enumerate para garantir que cada alerta também tenha uma chave única
+        for idx_alerta, (index, row) in enumerate(df_vendas.iterrows()):
             carne = str(row['carne'])
             for linha in carne.split('\n'):
                 if "/" in linha and "(Pago!)" not in linha:
@@ -191,46 +191,46 @@ elif menu == "Histórico de Vendas":
                         dt_p = datetime(2026, m_p, d_p)
                         if dt_p <= hoje:
                             alertas_found = True
-                            st.warning(f"Atraso: {row['cliente']} (R$ {v_p} em {p[1]})")
+                            st.warning(f"Atraso: {row['cliente']} (R$ {v_p})")
                     except: continue
     if not alertas_found: st.success("✅ Tudo em dia!")
 
     st.divider()
-    busca = st.text_input("🔍 Buscar Cliente no Histórico")
+    busca = st.text_input("🔍 Buscar Cliente")
     
     if not df_vendas.empty:
         df_f = df_vendas[df_vendas['cliente'].astype(str).str.contains(busca, case=False)] if busca else df_vendas
-        for index, row in df_f.iterrows():
-            # Criamos uma chave no session_state para controlar o modo de edição de cada venda
-            edit_key = f"edit_mode_{row['id']}"
+        
+        # AQUI ESTÁ O SEGREDO: Usamos enumerate para ter o 'i' (posição da linha)
+        for i, (index, row) in enumerate(df_f.iterrows()):
+            # A key agora combina o ID da venda com a posição 'i'
+            edit_key = f"edit_mode_{row['id']}_{i}" 
             if edit_key not in st.session_state: st.session_state[edit_key] = False
 
             with st.expander(f"{row['cliente']} - R$ {row['valor']} (Venda em {row['data']})"):
                 
                 if st.session_state[edit_key]:
-                    # MODO EDIÇÃO ATIVO
-                    st.info("💡 Você está no modo de edição. Altere os valores ou datas abaixo e clique em Salvar.")
-                    novo_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}")
-                    novo_carne = st.text_area("Detalhamento (Carnê)", value=row['carne'], height=200, key=f"c_edit_{row['id']}")
+                    st.info("💡 Modo de edição ativo.")
+                    # Adicionamos _{i} em todas as chaves de widgets
+                    novo_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
+                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
                     
                     col_save1, col_save2 = st.columns(2)
-                    if col_save1.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary"):
+                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
                         df_vendas.at[index, 'valor'] = str(novo_valor)
                         df_vendas.at[index, 'carne'] = novo_carne
                         conn.update(worksheet="vendas", data=df_vendas.astype(str))
                         st.session_state[edit_key] = False
                         atualizar_sistema()
-                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}"):
+                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}_{i}"):
                         st.session_state[edit_key] = False
                         st.rerun()
                 else:
-                    # MODO VISUALIZAÇÃO
                     st.code(row['carne'])
                     
                     c_h1, c_h2, c_h3, c_h4 = st.columns(4)
                     with c_h1:
-                        if st.button("💰 Pagar", key=f"p_{index}"):
-                            # Lógica de pagamento (marca a primeira pendente)
+                        if st.button("💰 Pagar", key=f"p_{row['id']}_{i}"):
                             linhas = str(row['carne']).split('\n')
                             nova_c, alt = [], False
                             for l in linhas:
@@ -241,8 +241,7 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str)); atualizar_sistema()
                     with c_h2:
-                        # Botão para entrar no modo de edição
-                        if st.button("✏️ Editar Venda", key=f"btn_edit_{row['id']}"):
+                        if st.button("✏️ Editar", key=f"btn_edit_{row['id']}_{i}"):
                             st.session_state[edit_key] = True
                             st.rerun()
                     with c_h3:
@@ -251,7 +250,7 @@ elif menu == "Histórico de Vendas":
                         msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
                         st.link_button("🟢 Whats", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
                     with c_h4:
-                        if st.button("🗑️", key=f"del_{index}"):
+                        if st.button("🗑️", key=f"del_{row['id']}_{i}"):
                             conn.update(worksheet="vendas", data=df_vendas.drop(index).astype(str)); atualizar_sistema()
 
 # --- 5. CONFIGURAÇÕES PIX ---
