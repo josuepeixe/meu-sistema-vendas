@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import dateutil.relativedelta
 import urllib.parse
 import calendar
+import re # Importado para limpeza de texto
 
 # Configuração da página
 st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_icon="🚀")
@@ -13,150 +14,175 @@ st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_ic
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 @st.cache_data(ttl=10)
-def ler_dados_cacheado():
+def ler_vendas():
     try:
-        data = conn.read(ttl=0)
-        if data is not None:
-            data = data.dropna(how='all')
-            return data.fillna("")
-        return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+        data = conn.read(worksheet="vendas", ttl=0)
+        return data.dropna(how='all').fillna("")
     except:
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+
+@st.cache_data(ttl=10)
+def ler_clientes():
+    try:
+        data = conn.read(worksheet="clientes", ttl=0)
+        return data.dropna(how='all').fillna("")
+    except:
+        return pd.DataFrame(columns=["nome", "telefone", "info"])
 
 def atualizar_sistema():
     st.cache_data.clear()
     st.rerun()
 
-# --- LÓGICA DE ARREDONDAMENTO (SEM CENTAVOS) ---
+# --- FUNÇÃO PARA LIMPAR E FORMATAR TELEFONE ---
+def formatar_telefone(num_texto):
+    # Remove tudo que não for número (parênteses, traços, espaços)
+    apenas_numeros = re.sub(r'\D', '', num_texto)
+    
+    if not apenas_numeros:
+        return ""
+    
+    # Se o usuário não colocou o 55 (Brasil), nós adicionamos
+    if len(apenas_numeros) <= 11 and not apenas_numeros.startswith("55"):
+        apenas_numeros = "55" + apenas_numeros
+        
+    return apenas_numeros
+
+# --- LÓGICA FINANCEIRA E DATAS ---
 def calcular_parcelas_inteiras(total, num_p):
     base = int(total // num_p)
     resto = int(total % num_p)
-    lista_valores = []
-    for i in range(num_p):
-        lista_valores.append(base + 1 if i < resto else base)
-    return lista_valores
+    return [base + 1 if i < resto else base for i in range(num_p)]
 
-# --- LÓGICA DE DATAS ---
-def calcular_opcoes_quinzena(data_referencia):
-    data_minima = data_referencia + timedelta(days=7)
-    data_minima = data_minima.replace(hour=0, minute=0, second=0, microsecond=0)
-    if data_minima.day <= 1: opt1 = data_minima.replace(day=1)
-    elif data_minima.day <= 15: opt1 = data_minima.replace(day=15)
-    else: opt1 = (data_minima + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
-    
-    if opt1.day == 1: opt2 = opt1.replace(day=15)
-    else: opt2 = (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+def calcular_opcoes_quinzena(data_ref):
+    data_min = data_ref + timedelta(days=7)
+    data_min = data_min.replace(hour=0, minute=0, second=0, microsecond=0)
+    if data_min.day <= 1: opt1 = data_min.replace(day=1)
+    elif data_min.day <= 15: opt1 = data_min.replace(day=15)
+    else: opt1 = (data_min + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+    opt2 = opt1.replace(day=15) if opt1.day == 1 else (opt1 + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
     return opt1, opt2
 
-def gerar_sequencia_datas(data_inicio, num_parcelas, frequencia):
+def gerar_sequencia_datas(data_inicio, num_p, freq):
     datas = []
-    data_atual = data_inicio
-    for i in range(num_parcelas):
-        if i == 0:
-            datas.append(data_atual.strftime("%d/%m"))
-            continue
-        if frequencia in ["Mensal", "Cartão (Maquininha)"]: 
-            data_atual = data_atual + dateutil.relativedelta.relativedelta(months=1)
-        else:
-            if data_atual.day == 1: data_atual = data_atual.replace(day=15)
-            else: data_atual = (data_atual + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
-        datas.append(data_atual.strftime("%d/%m"))
+    data_at = data_inicio
+    for i in range(num_p):
+        if i > 0:
+            if freq in ["Mensal", "Cartão (Maquininha)"]: data_at += dateutil.relativedelta.relativedelta(months=1)
+            else:
+                if data_at.day == 1: data_at = data_at.replace(day=15)
+                else: data_at = (data_at + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+        datas.append(data_at.strftime("%d/%m"))
     return datas
 
 # --- INTERFACE ---
-st.title("🛍️ Gestão de Vendas Master")
+st.sidebar.title("Navegação")
+menu = st.sidebar.selectbox("Menu", 
+    ["Histórico de Vendas", "Registrar Venda Nova", "Importar Venda em Andamento", "Cadastrar Cliente"]
+)
 
-menu = st.sidebar.selectbox("Menu", ["Registrar Venda Nova", "Importar Venda em Andamento", "Histórico de Vendas"])
-df = ler_dados_cacheado()
+df_vendas = ler_vendas()
+df_clientes = ler_clientes()
 
-# --- 1. REGISTRO DE VENDA NOVA ---
-if menu == "Registrar Venda Nova":
+# --- 1. CADASTRAR CLIENTE ---
+if menu == "Cadastrar Cliente":
+    st.subheader("👤 Cadastro de Novo Cliente")
+    with st.form("form_cliente", clear_on_submit=True):
+        nome = st.text_input("Nome Completo")
+        tel_input = st.text_input("WhatsApp (Pode digitar apenas o DDD e Número)", placeholder="Ex: 85 99999-8888")
+        info = st.text_area("Informações Adicionais (Endereço, etc.)")
+        sub = st.form_submit_button("Salvar Cliente")
+        
+        if sub and nome:
+            # Formata o telefone automaticamente antes de salvar
+            telefone_limpo = formatar_telefone(tel_input)
+            novo_c = pd.DataFrame([{"nome": nome, "telefone": telefone_limpo, "info": info}])
+            conn.update(worksheet="clientes", data=pd.concat([df_clientes, novo_c], ignore_index=True))
+            st.success(f"Cliente {nome} cadastrado com sucesso!")
+            atualizar_sistema()
+
+# --- 2. REGISTRAR VENDA NOVA ---
+elif menu == "Registrar Venda Nova":
     st.subheader("📝 Novo Registro Automático")
-    col1, col2 = st.columns(2)
-    with col1:
-        cliente = st.text_input("Nome do Cliente")
-        valor_total = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
-        frequencia = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
-        if frequencia == "Quinzena":
-            if "opcoes_q" not in st.session_state: st.session_state.opcoes_q = calcular_opcoes_quinzena(datetime.now())
-            data_p = st.radio("Primeira parcela?", options=st.session_state.opcoes_q, format_func=lambda x: x.strftime("%d/%m/%Y"))
-        else:
-            data_p = (datetime.now() + dateutil.relativedelta.relativedelta(months=1))
-    with col2:
-        num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
-        prod = st.text_area("Produtos")
+    if df_clientes.empty:
+        st.warning("Cadastre um cliente primeiro no menu 'Cadastrar Cliente'.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            cliente_sel = st.selectbox("Selecione o Cliente", df_clientes['nome'].unique())
+            valor_t = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
+            freq = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
+            if freq == "Quinzena":
+                if "opcoes_q" not in st.session_state: st.session_state.opcoes_q = calcular_opcoes_quinzena(datetime.now())
+                data_p = st.radio("Primeira parcela?", options=st.session_state.opcoes_q, format_func=lambda x: x.strftime("%d/%m/%Y"))
+            else:
+                data_p = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+        with col2:
+            num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
+            prod = st.text_area("Produtos")
 
-    if st.button("🚀 Salvar Venda", type="primary"):
-        if cliente and prod and valor_total:
-            datas = gerar_sequencia_datas(data_p, num_p, frequencia)
-            valores = calcular_parcelas_inteiras(valor_total, num_p)
-            complemento = " (Cartão)" if frequencia == "Cartão (Maquininha)" else ""
-            carne = f"{prod}\nValor Total: R$ {valor_total:.2f}{complemento}\n\n"
-            for v, d in zip(valores, datas): 
-                status_parc = " (Pago!)" if frequencia == "Cartão (Maquininha)" else ""
-                carne += f"{v:.2f} {d}{status_parc}\n"
-            status_venda = "Pago" if frequencia == "Cartão (Maquininha)" else "Pendente"
-            nova = pd.DataFrame([{"id": len(df)+1, "cliente": cliente, "produtos": prod, "valor": valor_total, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_venda}])
-            conn.update(data=pd.concat([df, nova], ignore_index=True))
-            if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
-            atualizar_sistema()
+        if st.button("🚀 Salvar Venda", type="primary"):
+            if cliente_sel and prod and valor_t:
+                datas = gerar_sequencia_datas(data_p, int(num_p), freq)
+                valores = calcular_parcelas_inteiras(valor_t, int(num_p))
+                carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
+                for v, d in zip(valores, datas):
+                    status_p = " (Pago!)" if freq == "Cartão (Maquininha)" else ""
+                    carne += f"{v:.2f} {d}{status_p}\n"
+                status_v = "Pago" if freq == "Cartão (Maquininha)" else "Pendente"
+                nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_v}])
+                conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True))
+                atualizar_sistema()
 
-# --- 2. IMPORTAR VENDA EM ANDAMENTO (CORRIGIDO) ---
+# --- 3. IMPORTAR VENDA EM ANDAMENTO ---
 elif menu == "Importar Venda em Andamento":
-    st.subheader("📥 Importar Vendas do Caderno")
-    col1, col2 = st.columns(2)
-    with col1:
-        c_nome = st.text_input("Nome do Cliente")
-        c_valor = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0)
-        c_data_original = st.date_input("Data original da compra", datetime.now())
-    with col2:
-        c_total_p = st.number_input("Total de parcelas", min_value=1, value=1)
-        c_pagas_p = st.number_input("Quantas JÁ PAGOU?", min_value=0, max_value=int(c_total_p), value=0)
-        c_prod = st.text_area("Produtos")
+    st.subheader("📥 Importar do Caderno")
+    if df_clientes.empty:
+        st.warning("Cadastre um cliente primeiro!")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            cliente_sel = st.selectbox("Selecione o Cliente", df_clientes['nome'].unique())
+            c_valor = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0)
+            c_data_orig = st.date_input("Data da compra", datetime.now())
+        with col2:
+            c_total_p = st.number_input("Total de parcelas", min_value=1, value=1)
+            c_pagas_p = st.number_input("Quantas JÁ PAGOU?", min_value=0, max_value=int(c_total_p))
+            c_prod = st.text_area("Produtos")
 
-    st.write("---")
-    st.write("📅 **Datas das Parcelas (Ordem Correta):**")
-    
-    datas_manuais = []
-    # CORREÇÃO: Loop que cria linhas de colunas para manter a ordem 1, 2, 3...
-    for i in range(0, int(c_total_p), 3):
-        cols = st.columns(3)
-        for j in range(3):
-            idx = i + j
-            if idx < int(c_total_p):
-                with cols[j]:
-                    d = st.date_input(f"Data Parcela {idx+1}", datetime.now() + timedelta(days=idx*15), key=f"imp_{idx}")
-                    datas_manuais.append(d.strftime("%d/%m"))
+        datas_manuais = []
+        for i in range(0, int(c_total_p), 3):
+            cols = st.columns(3)
+            for j in range(3):
+                idx = i + j
+                if idx < int(c_total_p):
+                    with cols[j]:
+                        d = st.date_input(f"Data P{idx+1}", datetime.now() + timedelta(days=idx*15), key=f"imp_{idx}")
+                        datas_manuais.append(d.strftime("%d/%m"))
 
-    if st.button("📥 Importar para o Sistema", type="primary"):
-        if c_nome and c_prod and c_valor > 0:
-            valores = calcular_parcelas_inteiras(c_valor, c_total_p)
+        if st.button("📥 Importar Venda", type="primary"):
+            valores = calcular_parcelas_inteiras(c_valor, int(c_total_p))
             carne = f"{c_prod}\nValor Total: R$ {c_valor:.2f}\n\n"
-            for i, (v, d_str) in enumerate(zip(valores, datas_manuais)):
-                pago_str = " (Pago!)" if i < c_pagas_p else ""
-                carne += f"{v:.2f} {d_str}{pago_str}\n"
+            for i, (v, d_s) in enumerate(zip(valores, datas_manuais)):
+                carne += f"{v:.2f} {d_s}{' (Pago!)' if i < c_pagas_p else ''}\n"
             status = "Pago" if c_pagas_p == c_total_p else ("Pagamento Parcial" if c_pagas_p > 0 else "Pendente")
-            nova = pd.DataFrame([{"id": len(df)+1, "cliente": c_nome, "produtos": c_prod, "valor": c_valor, "data": c_data_original.strftime("%d/%m/%Y"), "carne": carne, "status": status}])
-            conn.update(data=pd.concat([df, nova], ignore_index=True))
+            nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": c_prod, "valor": c_valor, "data": c_data_orig.strftime("%d/%m/%Y"), "carne": carne, "status": status}])
+            conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True))
             atualizar_sistema()
 
-# --- 3. HISTÓRICO E DASHBOARD QUINZENAL ---
+# --- 4. HISTÓRICO E DASHBOARD ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now()
     mes_at, ano_at = hoje.month, hoje.year
-    if hoje.day <= 15: ini, fim, txt = 1, 15, f"01/{mes_at:02d} a 15/{mes_at:02d}"
-    else: ini, fim = 16, calendar.monthrange(ano_at, mes_at)[1]; txt = f"16/{mes_at:02d} a {fim}/{mes_at:02d}"
-
-    st.subheader(f"📊 Resumo Quinzena ({txt})")
+    ini, fim = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
+    
+    st.subheader(f"📊 Resumo Financeiro ({ini:02d} a {fim:02d}/{mes_at:02d})")
     vol, rec = 0.0, 0.0
-    if not df.empty:
-        for _, row in df.iterrows():
+    if not df_vendas.empty:
+        for _, row in df_vendas.iterrows():
             for linha in str(row['carne']).split('\n'):
                 if "/" in linha:
                     try:
-                        p = linha.split()
-                        v = float(p[0].replace(',', '.'))
-                        d, m = int(p[1].split('/')[0]), int(p[1].split('/')[1])
+                        p = linha.split(); v = float(p[0]); d, m = int(p[1].split('/')[0]), int(p[1].split('/')[1])
                         if m == mes_at and ini <= d <= fim:
                             vol += v
                             if "(Pago!)" in linha: rec += v
@@ -165,14 +191,14 @@ elif menu == "Histórico de Vendas":
         m1.metric("Parcelas na Quinzena", f"R$ {vol:.2f}")
         m2.metric("Recebido", f"R$ {rec:.2f}")
         m3.metric("A Receber", f"R$ {vol-rec:.2f}", delta_color="inverse")
-    
+
     st.divider()
-    busca = st.text_input("🔍 Buscar Cliente")
-    filtro_status = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
+    busca = st.text_input("🔍 Buscar por Nome do Cliente")
+    status_f = st.selectbox("Filtrar Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
     
-    if not df.empty:
-        df_f = df[df['cliente'].astype(str).str.contains(busca, case=False)] if busca else df
-        if filtro_status != "Todos": df_f = df_f[df_f['status'] == filtro_status]
+    if not df_vendas.empty:
+        df_f = df_vendas[df_vendas['cliente'].astype(str).str.contains(busca, case=False)] if busca else df_vendas
+        if status_f != "Todos": df_f = df_f[df_f['status'] == status_f]
             
         for index, row in df_f.iterrows():
             if not row['cliente'] or str(row['cliente']).lower() == "nan": continue
@@ -181,23 +207,26 @@ elif menu == "Histórico de Vendas":
                 st.code(str(row['carne']), language="text")
                 c_btn = st.columns([1, 1, 1, 2])
                 with c_btn[0]:
-                    if "(Pago!)" not in str(row['carne']) or row['status'] != "Pago":
+                    if "(Pago!)" in str(row['carne']) and row['status'] != "Pago" or "Pendente" in str(row['status']):
                         if st.button("💰 Pagar", key=f"p_{index}"):
                             linhas = str(row['carne']).split('\n')
-                            nova_c, alterou = [], False
+                            nova_c, alt = [], False
                             for l in linhas:
-                                if "/" in l and "(Pago!)" not in l and not alterou:
-                                    l += " (Pago!)"; alterou = True
+                                if "/" in l and "(Pago!)" not in l and not alt:
+                                    l += " (Pago!)"; alt = True
                                 nova_c.append(l)
-                            df.at[index, 'carne'] = "\n".join(nova_c)
-                            df.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
-                            conn.update(data=df); atualizar_sistema()
+                            df_vendas.at[index, 'carne'] = "\n".join(nova_c)
+                            df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
+                            conn.update(worksheet="vendas", data=df_vendas); atualizar_sistema()
                 with c_btn[1]:
-                    msg = f"Olá {row['cliente']}! Segue o resumo:\n\n{row['carne']}"
-                    st.link_button("🟢 WhatsApp", f"https://wa.me/?text={urllib.parse.quote(msg)}")
+                    # Busca telefone do cliente para o link
+                    tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
+                    tel_final = tel_c[0] if len(tel_c) > 0 else ""
+                    msg = urllib.parse.quote(f"Olá {row['cliente']}! Segue o resumo:\n\n{row['carne']}")
+                    st.link_button("🟢 WhatsApp", f"https://wa.me/{tel_final}?text={msg}")
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
-                        conn.update(data=df.drop(index)); atualizar_sistema()
+                        conn.update(worksheet="vendas", data=df_vendas.drop(index)); atualizar_sistema()
 
 # --- CRÉDITOS NA BARRA LATERAL ---
 st.sidebar.markdown("---") # Adiciona uma linha horizontal para separar dos filtros
