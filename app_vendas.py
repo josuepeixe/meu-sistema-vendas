@@ -19,7 +19,7 @@ def ler_vendas():
         data = conn.read(worksheet="vendas", ttl=0)
         if data.empty:
             return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
-        return data.dropna(how='all').fillna("").astype(str) # Força tudo como texto
+        return data.dropna(how='all').fillna("").astype(str)
     except:
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
@@ -29,8 +29,6 @@ def ler_clientes():
         data = conn.read(worksheet="clientes", ttl=0)
         if data.empty or "nome" not in data.columns:
             return pd.DataFrame(columns=["nome", "telefone", "info"])
-        
-        # Limpeza crucial: transforma em texto e remove o ".0" fantasma
         df = data.dropna(how='all').fillna("").astype(str)
         df['telefone'] = df['telefone'].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
         return df
@@ -43,14 +41,9 @@ def atualizar_sistema():
 
 # --- FUNÇÕES AUXILIARES ---
 def formatar_telefone(num_texto):
-    # Converte para string e remove ".0" se existir
     num_str = str(num_texto).replace(".0", "")
-    # Remove tudo que não for número
     apenas_numeros = re.sub(r'\D', '', num_str)
-    
     if not apenas_numeros: return ""
-    
-    # Adiciona o 55 se não tiver
     if len(apenas_numeros) <= 11 and not apenas_numeros.startswith("55"):
         apenas_numeros = "55" + apenas_numeros
     return apenas_numeros
@@ -165,7 +158,6 @@ elif menu == "Registrar Venda em Andamento":
 # --- 3. REGISTRAR CLIENTE ---
 elif menu == "Registrar Cliente":
     tab1, tab2 = st.tabs(["➕ Cadastrar Novo", "👥 Ver e Editar"])
-    
     with tab1:
         with st.form("form_cliente", clear_on_submit=True):
             nome = st.text_input("Nome Completo")
@@ -175,40 +167,76 @@ elif menu == "Registrar Cliente":
                 if nome:
                     tel_limpo = formatar_telefone(tel_input)
                     novo_c = pd.DataFrame([{"nome": nome, "telefone": tel_limpo, "info": info}])
-                    # Salva forçando tipo string
-                    df_final = pd.concat([df_clientes, novo_c], ignore_index=True).astype(str)
-                    conn.update(worksheet="clientes", data=df_final)
+                    conn.update(worksheet="clientes", data=pd.concat([df_clientes, novo_c], ignore_index=True).astype(str))
                     atualizar_sistema()
-    
     with tab2:
         if not df_clientes.empty:
             cliente_edit = st.selectbox("Selecione o cliente", df_clientes['nome'].tolist())
             idx_c = df_clientes[df_clientes['nome'] == cliente_edit].index[0]
             with st.form("edit_cliente"):
                 new_nome = st.text_input("Nome", value=df_clientes.at[idx_c, 'nome'])
-                # Mostra o telefone limpo sem o .0
-                tel_atual = str(df_clientes.at[idx_c, 'telefone']).replace(".0", "")
-                new_tel = st.text_input("WhatsApp", value=tel_atual)
+                new_tel = st.text_input("WhatsApp", value=str(df_clientes.at[idx_c, 'telefone']).replace(".0", ""))
                 new_info = st.text_area("Informações", value=df_clientes.at[idx_c, 'info'])
-                
                 c_e1, c_e2 = st.columns(2)
                 if c_e1.form_submit_button("💾 Salvar"):
                     df_clientes.at[idx_c, 'nome'] = new_nome
                     df_clientes.at[idx_c, 'telefone'] = formatar_telefone(new_tel)
                     df_clientes.at[idx_c, 'info'] = new_info
-                    conn.update(worksheet="clientes", data=df_clientes.astype(str))
-                    atualizar_sistema()
+                    conn.update(worksheet="clientes", data=df_clientes.astype(str)); atualizar_sistema()
                 if c_e2.form_submit_button("🗑️ Excluir"):
-                    conn.update(worksheet="clientes", data=df_clientes.drop(idx_c).astype(str))
-                    atualizar_sistema()
+                    conn.update(worksheet="clientes", data=df_clientes.drop(idx_c).astype(str)); atualizar_sistema()
 
-# --- 4. HISTÓRICO DE VENDAS ---
+# --- 4. HISTÓRICO DE VENDAS COM ALERTAS ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now()
+    hoje_data_check = hoje.replace(hour=0, minute=0, second=0, microsecond=0)
     mes_at, ano_at = hoje.month, hoje.year
     ini, fim = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
     
-    st.subheader(f"📊 Resumo Financeiro ({ini:02d} a {fim:02d}/{mes_at:02d})")
+    # 🚨 SEÇÃO DE ALERTAS (NOVIDADE!)
+    st.subheader("🚨 Alertas de Cobrança (Atrasados ou Hoje)")
+    alertas_found = False
+    
+    if not df_vendas.empty:
+        for index, row in df_vendas.iterrows():
+            carne = str(row['carne'])
+            linhas = carne.split('\n')
+            for linha in linhas:
+                if "/" in linha and "(Pago!)" not in linha:
+                    try:
+                        partes = linha.split()
+                        data_str = partes[1] # "15/04"
+                        dia_p, mes_p = map(int, data_str.split('/'))
+                        # Criamos um objeto data para comparação (ano atual)
+                        data_parcela = datetime(ano_at, mes_p, dia_p)
+                        
+                        if data_parcela <= hoje_data_check:
+                            alertas_found = True
+                            status_msg = "🕒 VENCE HOJE" if data_parcela == hoje_data_check else "⚠️ ATRASADO"
+                            cor_alerta = "orange" if data_parcela == hoje_data_check else "red"
+                            
+                            with st.container():
+                                st.markdown(f"""
+                                <div style="border: 2px solid {cor_alerta}; border-radius: 10px; padding: 10px; margin-bottom: 10px; background-color: rgba(255, 0, 0, 0.05);">
+                                    <h4 style="margin: 0; color: {cor_alerta};">{status_msg}: {row['cliente']}</h4>
+                                    <p style="margin: 5px 0;">Parcela de <b>R$ {partes[0]}</b> vencendo em <b>{data_str}</b></p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Botão de WhatsApp rápido para cobrança
+                                tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
+                                tel_final = str(tel_c[0]).replace(".0", "") if len(tel_c) > 0 else ""
+                                msg_cobranca = urllib.parse.quote(f"Olá {row['cliente']}! Percebi que temos uma parcela de R$ {partes[0]} com vencimento para {data_str} ainda pendente. Segue o resumo:\n\n{carne}")
+                                st.link_button(f"📲 Cobrar {row['cliente']}", f"https://api.whatsapp.com/send?phone={tel_final}&text={msg_cobranca}")
+                    except: continue
+    
+    if not alertas_found:
+        st.success("✅ Nenhuma cobrança atrasada para hoje!")
+
+    st.divider()
+
+    # --- RESUMO FINANCEIRO ---
+    st.subheader(f"📊 Fluxo de Caixa da Quinzena ({ini:02d} a {fim:02d}/{mes_at:02d})")
     vol, rec = 0.0, 0.0
     if not df_vendas.empty:
         for _, row in df_vendas.iterrows():
@@ -226,7 +254,7 @@ elif menu == "Histórico de Vendas":
         m3.metric("A Receber", f"R$ {vol-rec:.2f}", delta_color="inverse")
 
     st.divider()
-    busca = st.text_input("🔍 Buscar Cliente")
+    busca = st.text_input("🔍 Buscar Cliente no Histórico")
     status_f = st.selectbox("Status", ["Todos", "Pendentes", "Pagamento Parcial", "Pago"])
     
     if not df_vendas.empty:
@@ -251,17 +279,11 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'carne'] = "\n".join(nova_c)
                             df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str)); atualizar_sistema()
-                
                 with c_btn[1]:
-                    tel_final = ""
-                    if not df_clientes.empty:
-                        filtro_tel = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
-                        if len(filtro_tel) > 0: tel_final = str(filtro_tel[0]).replace(".0", "")
-                    
+                    tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
+                    tel_final = str(tel_c[0]).replace(".0", "") if len(tel_c) > 0 else ""
                     msg_txt = urllib.parse.quote(f"Olá {row['cliente']}! Segue o resumo da sua compra:\n\n{row['carne']}")
-                    url_wa = f"https://api.whatsapp.com/send?phone={tel_final}&text={msg_txt}"
-                    st.link_button("🟢 WhatsApp", url_wa)
-
+                    st.link_button("🟢 WhatsApp", f"https://api.whatsapp.com/send?phone={tel_final}&text={msg_txt}")
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(worksheet="vendas", data=df_vendas.drop(index).astype(str)); atualizar_sistema()
