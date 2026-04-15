@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import dateutil.relativedelta
 import urllib.parse
 import calendar
-import re # Importado para limpeza de texto
+import re
 
 # Configuração da página
 st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_icon="🚀")
@@ -17,6 +17,8 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def ler_vendas():
     try:
         data = conn.read(worksheet="vendas", ttl=0)
+        if data.empty:
+            return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
         return data.dropna(how='all').fillna("")
     except:
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
@@ -25,6 +27,8 @@ def ler_vendas():
 def ler_clientes():
     try:
         data = conn.read(worksheet="clientes", ttl=0)
+        if data.empty or "nome" not in data.columns:
+            return pd.DataFrame(columns=["nome", "telefone", "info"])
         return data.dropna(how='all').fillna("")
     except:
         return pd.DataFrame(columns=["nome", "telefone", "info"])
@@ -33,21 +37,14 @@ def atualizar_sistema():
     st.cache_data.clear()
     st.rerun()
 
-# --- FUNÇÃO PARA LIMPAR E FORMATAR TELEFONE ---
+# --- FUNÇÕES AUXILIARES ---
 def formatar_telefone(num_texto):
-    # Remove tudo que não for número (parênteses, traços, espaços)
-    apenas_numeros = re.sub(r'\D', '', num_texto)
-    
-    if not apenas_numeros:
-        return ""
-    
-    # Se o usuário não colocou o 55 (Brasil), nós adicionamos
+    apenas_numeros = re.sub(r'\D', '', str(num_texto))
+    if not apenas_numeros: return ""
     if len(apenas_numeros) <= 11 and not apenas_numeros.startswith("55"):
         apenas_numeros = "55" + apenas_numeros
-        
     return apenas_numeros
 
-# --- LÓGICA FINANCEIRA E DATAS ---
 def calcular_parcelas_inteiras(total, num_p):
     base = int(total // num_p)
     resto = int(total % num_p)
@@ -74,37 +71,21 @@ def gerar_sequencia_datas(data_inicio, num_p, freq):
         datas.append(data_at.strftime("%d/%m"))
     return datas
 
-# --- INTERFACE ---
+# --- NAVEGAÇÃO ---
 st.sidebar.title("Navegação")
+# ORDEM ATUALIZADA CONFORME SOLICITADO
 menu = st.sidebar.selectbox("Menu", 
-    ["Histórico de Vendas", "Registrar Venda Nova", "Importar Venda em Andamento", "Cadastrar Cliente"]
+    ["Registrar Venda Nova", "Registrar Venda em Andamento", "Registrar Cliente", "Histórico de Vendas"]
 )
 
 df_vendas = ler_vendas()
 df_clientes = ler_clientes()
 
-# --- 1. CADASTRAR CLIENTE ---
-if menu == "Cadastrar Cliente":
-    st.subheader("👤 Cadastro de Novo Cliente")
-    with st.form("form_cliente", clear_on_submit=True):
-        nome = st.text_input("Nome Completo")
-        tel_input = st.text_input("WhatsApp (Pode digitar apenas o DDD e Número)", placeholder="Ex: 85 99999-8888")
-        info = st.text_area("Informações Adicionais (Endereço, etc.)")
-        sub = st.form_submit_button("Salvar Cliente")
-        
-        if sub and nome:
-            # Formata o telefone automaticamente antes de salvar
-            telefone_limpo = formatar_telefone(tel_input)
-            novo_c = pd.DataFrame([{"nome": nome, "telefone": telefone_limpo, "info": info}])
-            conn.update(worksheet="clientes", data=pd.concat([df_clientes, novo_c], ignore_index=True))
-            st.success(f"Cliente {nome} cadastrado com sucesso!")
-            atualizar_sistema()
-
-# --- 2. REGISTRAR VENDA NOVA ---
-elif menu == "Registrar Venda Nova":
+# --- 1. REGISTRAR VENDA NOVA ---
+if menu == "Registrar Venda Nova":
     st.subheader("📝 Novo Registro Automático")
     if df_clientes.empty:
-        st.warning("Cadastre um cliente primeiro no menu 'Cadastrar Cliente'.")
+        st.warning("Cadastre um cliente primeiro no menu 'Registrar Cliente'.")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -131,11 +112,12 @@ elif menu == "Registrar Venda Nova":
                 status_v = "Pago" if freq == "Cartão (Maquininha)" else "Pendente"
                 nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": status_v}])
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True))
+                if "opcoes_q" in st.session_state: del st.session_state.opcoes_q
                 atualizar_sistema()
 
-# --- 3. IMPORTAR VENDA EM ANDAMENTO ---
-elif menu == "Importar Venda em Andamento":
-    st.subheader("📥 Importar do Caderno")
+# --- 2. REGISTRAR VENDA EM ANDAMENTO ---
+elif menu == "Registrar Venda em Andamento":
+    st.subheader("📥 Importar Vendas do Caderno")
     if df_clientes.empty:
         st.warning("Cadastre um cliente primeiro!")
     else:
@@ -149,6 +131,7 @@ elif menu == "Importar Venda em Andamento":
             c_pagas_p = st.number_input("Quantas JÁ PAGOU?", min_value=0, max_value=int(c_total_p))
             c_prod = st.text_area("Produtos")
 
+        st.write("---")
         datas_manuais = []
         for i in range(0, int(c_total_p), 3):
             cols = st.columns(3)
@@ -169,7 +152,53 @@ elif menu == "Importar Venda em Andamento":
             conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True))
             atualizar_sistema()
 
-# --- 4. HISTÓRICO E DASHBOARD ---
+# --- 3. REGISTRAR CLIENTE (COM EDIÇÃO) ---
+elif menu == "Registrar Cliente":
+    tab1, tab2 = st.tabs(["➕ Cadastrar Novo", "👥 Ver e Editar Clientes"])
+    
+    with tab1:
+        st.subheader("👤 Novo Cliente")
+        with st.form("form_cliente", clear_on_submit=True):
+            nome = st.text_input("Nome Completo")
+            tel_input = st.text_input("WhatsApp (DDD + Número)", placeholder="Ex: 85999998888")
+            info = st.text_area("Informações Adicionais")
+            if st.form_submit_button("Salvar Cliente"):
+                if nome:
+                    tel_limpo = formatar_telefone(tel_input)
+                    novo_c = pd.DataFrame([{"nome": nome, "telefone": tel_limpo, "info": info}])
+                    conn.update(worksheet="clientes", data=pd.concat([df_clientes, novo_c], ignore_index=True))
+                    st.success(f"Cliente {nome} cadastrado!")
+                    atualizar_sistema()
+    
+    with tab2:
+        st.subheader("📋 Lista de Clientes")
+        if not df_clientes.empty:
+            cliente_edit = st.selectbox("Selecione um cliente para editar", df_clientes['nome'].tolist())
+            idx_c = df_clientes[df_clientes['nome'] == cliente_edit].index[0]
+            
+            with st.form("edit_cliente"):
+                new_nome = st.text_input("Nome", value=df_clientes.at[idx_c, 'nome'])
+                new_tel = st.text_input("WhatsApp", value=df_clientes.at[idx_c, 'telefone'])
+                new_info = st.text_area("Informações", value=df_clientes.at[idx_c, 'info'])
+                
+                col_e1, col_e2 = st.columns(2)
+                if col_e1.form_submit_button("💾 Salvar Alterações"):
+                    df_clientes.at[idx_c, 'nome'] = new_nome
+                    df_clientes.at[idx_c, 'telefone'] = formatar_telefone(new_tel)
+                    df_clientes.at[idx_c, 'info'] = new_info
+                    conn.update(worksheet="clientes", data=df_clientes)
+                    st.success("Dados atualizados!")
+                    atualizar_sistema()
+                
+                if col_e2.form_submit_button("🗑️ Excluir Cliente"):
+                    df_clientes = df_clientes.drop(idx_c)
+                    conn.update(worksheet="clientes", data=df_clientes)
+                    st.warning("Cliente removido.")
+                    atualizar_sistema()
+        else:
+            st.info("Nenhum cliente cadastrado.")
+
+# --- 4. HISTÓRICO DE VENDAS ---
 elif menu == "Histórico de Vendas":
     hoje = datetime.now()
     mes_at, ano_at = hoje.month, hoje.year
@@ -207,7 +236,7 @@ elif menu == "Histórico de Vendas":
                 st.code(str(row['carne']), language="text")
                 c_btn = st.columns([1, 1, 1, 2])
                 with c_btn[0]:
-                    if "(Pago!)" in str(row['carne']) and row['status'] != "Pago" or "Pendente" in str(row['status']):
+                    if "(Pago!)" not in str(row['carne']) or row['status'] != "Pago":
                         if st.button("💰 Pagar", key=f"p_{index}"):
                             linhas = str(row['carne']).split('\n')
                             nova_c, alt = [], False
@@ -218,12 +247,19 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'carne'] = "\n".join(nova_c)
                             df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas); atualizar_sistema()
+                
                 with c_btn[1]:
-                    # Busca telefone do cliente para o link
-                    tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
-                    tel_final = tel_c[0] if len(tel_c) > 0 else ""
-                    msg = urllib.parse.quote(f"Olá {row['cliente']}! Segue o resumo:\n\n{row['carne']}")
-                    st.link_button("🟢 WhatsApp", f"https://wa.me/{tel_final}?text={msg}")
+                    # BUSCA TELEFONE DE FORMA SEGURA
+                    tel_final = ""
+                    if not df_clientes.empty:
+                        filtro_tel = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
+                        if len(filtro_tel) > 0: tel_final = str(filtro_tel[0])
+                    
+                    msg_txt = urllib.parse.quote(f"Olá {row['cliente']}! Segue o resumo da sua compra:\n\n{row['carne']}")
+                    # LINK FORMATADO PARA EVITAR ERROS NO NAVEGADOR
+                    url_wa = f"https://api.whatsapp.com/send?phone={tel_final}&text={msg_txt}"
+                    st.link_button("🟢 WhatsApp", url_wa)
+
                 with c_btn[2]:
                     if st.button("🗑️", key=f"d_{index}"):
                         conn.update(worksheet="vendas", data=df_vendas.drop(index)); atualizar_sistema()
