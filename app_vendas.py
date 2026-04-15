@@ -17,7 +17,13 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def ler_vendas():
     try:
         data = conn.read(worksheet="vendas", ttl=0)
-        return data.dropna(how='all').fillna("").astype(str)
+        if data.empty:
+            return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+        df = data.dropna(how='all').fillna("").astype(str)
+        # Remove .0 de IDs ou valores que o Sheets possa ter bugado
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
+        return df
     except:
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
@@ -25,6 +31,7 @@ def ler_vendas():
 def ler_clientes():
     try:
         data = conn.read(worksheet="clientes", ttl=0)
+        if data.empty: return pd.DataFrame(columns=["nome", "telefone", "info"])
         df = data.dropna(how='all').fillna("").astype(str)
         df['telefone'] = df['telefone'].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
         return df
@@ -37,7 +44,11 @@ def ler_config():
         data = conn.read(worksheet="config", ttl=0)
         if data.empty:
             return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
-        return data.dropna(how='all').fillna("").astype(str)
+        df = data.dropna(how='all').fillna("").astype(str)
+        # LIMPEZA CRUCIAL DA CHAVE PIX
+        for col in df.columns:
+            df[col] = df[col].apply(lambda x: str(x).replace(".0", "") if str(x).endswith(".0") else str(x))
+        return df
     except:
         return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
 
@@ -91,8 +102,8 @@ df_vendas = ler_vendas()
 df_clientes = ler_clientes()
 df_config = ler_config()
 
-pix_chave = df_config.at[0, 'chave_pix'] if not df_config.empty else ""
-pix_nome = df_config.at[0, 'nome_pix'] if not df_config.empty else ""
+pix_chave = str(df_config.at[0, 'chave_pix']) if not df_config.empty else ""
+pix_nome = str(df_config.at[0, 'nome_pix']) if not df_config.empty else ""
 
 # --- 1. REGISTRAR VENDA NOVA ---
 if menu == "Registrar Venda Nova":
@@ -201,7 +212,6 @@ elif menu == "Histórico de Vendas":
     mes_at, ano_at = hoje.month, hoje.year
     ini, fim = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
     
-    # 🚨 ALERTAS
     st.subheader("🚨 Alertas de Cobrança")
     alertas_found = False
     if not df_vendas.empty:
@@ -229,7 +239,6 @@ elif menu == "Histórico de Vendas":
     if not alertas_found: st.success("✅ Tudo em dia!")
 
     st.divider()
-    # Dashboard Financeiro
     vol, rec = 0.0, 0.0
     if not df_vendas.empty:
         for _, row in df_vendas.iterrows():
@@ -285,11 +294,13 @@ elif menu == "Histórico de Vendas":
 elif menu == "Configurações Pix":
     st.subheader("⚙️ Configurações Pix")
     with st.form("form_config"):
+        # Mostra a chave atual limpa
         nova_chave = st.text_input("Chave Pix", value=pix_chave)
         novo_nome = st.text_input("Nome no Banco", value=pix_nome)
         if st.form_submit_button("💾 Salvar"):
-            df_n = pd.DataFrame([{"chave_pix": nova_chave, "nome_pix": novo_nome}])
-            conn.update(worksheet="config", data=df_n.astype(str))
+            # Força o salvamento como texto puro
+            df_n = pd.DataFrame([{"chave_pix": str(nova_chave), "nome_pix": str(novo_nome)}]).astype(str)
+            conn.update(worksheet="config", data=df_n)
             atualizar_sistema()
 
 # --- CRÉDITOS NA BARRA LATERAL ---
