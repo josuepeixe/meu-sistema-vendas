@@ -13,25 +13,26 @@ st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_ic
 # --- CONEXÃO E CACHE ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=600) # Aumentado para 10 min para performance
 def ler_vendas():
     try:
         data = conn.read(worksheet="vendas", ttl=0)
-        df = data.dropna(how='all').fillna("").astype(str)
-        for col in df.columns:
-            df[col] = df[col].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
-        return df
-    except:
+        if data is None or data.empty:
+            return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+        return data.dropna(how='all')
+    except Exception as e:
+        st.error(f"Erro ao carregar vendas: {e}")
         return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=600)
 def ler_clientes():
     try:
         data = conn.read(worksheet="clientes", ttl=0)
-        df = data.dropna(how='all').fillna("").astype(str)
-        df['telefone'] = df['telefone'].apply(lambda x: x.replace(".0", "") if x.endswith(".0") else x)
-        return df
-    except:
+        if data is None or data.empty:
+            return pd.DataFrame(columns=["nome", "telefone", "info"])
+        return data.dropna(how='all')
+    except Exception as e:
+        st.error(f"Erro ao carregar clientes: {e}")
         return pd.DataFrame(columns=["nome", "telefone", "info"])
 
 @st.cache_data(ttl=10)
@@ -107,7 +108,13 @@ if menu == "Registrar Venda Nova":
             prod = st.text_area("Produtos")
 
         if st.button("🚀 Salvar Venda", type="primary"):
-            if cliente_sel and prod and valor_t:
+            if not cliente_sel:
+                st.error("Selecione um cliente!")
+            elif valor_t is None or valor_t <= 0:
+                st.error("Insira um valor válido!")
+            elif not prod:
+                st.error("Descreva os produtos!")
+            else:
                 valores = calcular_parcelas_inteiras(valor_t, int(num_p))
                 carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
                 for i, v in enumerate(valores):
@@ -198,8 +205,19 @@ elif menu == "Histórico de Vendas":
             for linha in carne.split('\n'):
                 if "/" in linha and "(Pago!)" not in linha:
                     try:
-                        p = linha.split(); v_p = p[0]; d_p, m_p = map(int, p[1].split('/'))
-                        dt_p = datetime(2026, m_p, d_p)
+                        p = linha.split()
+                        v_p = p[0]
+                        d_p, m_p = map(int, p[1].split('/'))
+
+                        # Lógica dinâmica: usa o ano atual (ano_at) que você já definiu no topo do menu
+                        ano_referencia = ano_at 
+
+                        # Segurança: Se a parcela for de Janeiro (1) e hoje for Dezembro (12), 
+                        # o sistema entende que a parcela é do ano que vem.
+                        if m_p < mes_at and mes_at == 12:
+                            ano_referencia += 1
+
+                        dt_p = datetime(ano_referencia, m_p, d_p)
                         if dt_p <= hoje_check:
                             alertas_found = True
                             st.warning(f"Atraso: {row['cliente']} (R$ {p[0]} em {p[1]})")
@@ -294,10 +312,13 @@ elif menu == "Histórico de Vendas":
                             msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, row['valor']))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
                     with c_h[4]: # EXCLUIR (O botão que voltou!)
-                        if st.button("🗑️", key=f"del_{row['id']}_{i}"):
-                            df_vendas = df_vendas.drop(index)
-                            conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                            atualizar_sistema()
+                        with st.popover("🗑️"):
+                            st.warning("Excluir esta venda?")
+                            if st.button("Sim, apagar", key=f"conf_del_{row['id']}_{i}", type="primary"):
+                                df_vendas = df_vendas.drop(index)
+                                conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                                st.success("Excluído!")
+                                atualizar_sistema()
 
 # --- 5. CONFIGURAÇÕES PIX ---
 elif menu == "Configurações Pix":
