@@ -274,7 +274,7 @@ elif menu == "Histórico de Vendas":
         df_f = df_f.sort_values(by='id', ascending=False)
 
         for i, (index, row) in enumerate(df_f.iterrows()):
-            edit_key = f"edit_mode_{row['id']}" # Simplificado: usar apenas o ID único
+            edit_key = f"edit_mode_{row['id']}_{i}" # Simplificado: usar apenas o ID único
             if edit_key not in st.session_state: 
                 st.session_state[edit_key] = False
 
@@ -287,11 +287,11 @@ elif menu == "Histórico de Vendas":
             with st.expander(label_expander):
                 if st.session_state[edit_key]:
                     st.info("💡 Modo de edição ativo.")
-                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_edit_{row['id']}")
-                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}")
+                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
+                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
                     
                     col_save1, col_save2 = st.columns(2)
-                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}", type="primary"):
+                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
                         df_vendas.at[index, 'valor'] = str(novo_valor)
                         df_vendas.at[index, 'carne'] = novo_carne
                         conn.update(worksheet="vendas", data=df_vendas.astype(str))
@@ -311,7 +311,7 @@ elif menu == "Histórico de Vendas":
                     tel_f = dict_telefones.get(row['cliente'], "")
 
                     with c_h[0]: # PAGAR
-                        if st.button("💰", key=f"p_{row['id']}"):
+                        if st.button("💰", key=f"p_{row['id']}_{i}"):
                             linhas = str(row['carne']).split('\n')
                             nova_c, alt = [], False
                             for l in linhas:
@@ -325,7 +325,7 @@ elif menu == "Histórico de Vendas":
                             atualizar_sistema()
 
                     with c_h[1]: # EDITAR
-                        if st.button("✏️", key=f"btn_edit_{row['id']}"):
+                        if st.button("✏️", key=f"btn_edit_{row['id']}_{i}"):
                             st.session_state[edit_key] = True
                             st.rerun()
 
@@ -341,7 +341,7 @@ elif menu == "Histórico de Vendas":
                     with c_h[4]: # EXCLUIR
                         with st.popover("🗑️"):
                             st.warning("Excluir venda?")
-                            if st.button("Sim", key=f"conf_del_{row['id']}", type="primary"):
+                            if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
                                 df_vendas = df_vendas.drop(index)
                                 conn.update(worksheet="vendas", data=df_vendas.astype(str))
                                 atualizar_sistema()
