@@ -14,45 +14,66 @@ st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_ic
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 @st.cache_data(ttl=600) # Aumentado para 10 min para performance
-def ler_vendas():
-    try:
-        data = conn.read(worksheet="vendas", ttl=0)
-        if data is None or data.empty:
-            return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
-        return data.dropna(how='all')
-    except Exception as e:
-        st.error(f"Erro ao carregar vendas: {e}")
-        return pd.DataFrame(columns=["id", "cliente", "produtos", "valor", "data", "carne", "status"])
+def buscar_dados_brutos():
+    """Busca os dados brutos do Sheets (Cache Global)."""
+    v = conn.read(worksheet="vendas", ttl=0)
+    c = conn.read(worksheet="clientes", ttl=0)
+    cfg = conn.read(worksheet="config", ttl=0)
+    return v, c, cfg
 
-@st.cache_data(ttl=600)
-def ler_clientes():
-    try:
-        data = conn.read(worksheet="clientes", ttl=0)
-        if data is None or data.empty:
-            return pd.DataFrame(columns=["nome", "telefone", "info"])
-        return data.dropna(how='all')
-    except Exception as e:
-        st.error(f"Erro ao carregar clientes: {e}")
-        return pd.DataFrame(columns=["nome", "telefone", "info"])
+def limpar_dataframe(df):
+    """Função única para limpeza (Sugestão 1 - DRY)."""
+    if df is None or df.empty: 
+        return pd.DataFrame()
+    # Converte para string e remove o .0 de uma vez (Vetorizado)
+    df = df.fillna("").astype(str)
+    return df.apply(lambda x: x.str.replace(r'\.0$', '', regex=True))
 
-@st.cache_data(ttl=10)
-def ler_config():
-    try:
-        data = conn.read(worksheet="config", ttl=0)
-        df = data.dropna(how='all').fillna("").astype(str)
-        if df.empty:
-            return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
-        for col in df.columns:
-            df[col] = df[col].apply(lambda x: str(x).replace(".0", "") if str(x).endswith(".0") else str(x))
-        return df
-    except:
-        return pd.DataFrame([{"chave_pix": "", "nome_pix": ""}]).astype(str)
+# Inicialização do Estado da Sessão (Sugestão 3)
+if 'df_vendas' not in st.session_state:
+    v_raw, c_raw, cfg_raw = buscar_dados_brutos()
+    st.session_state['df_vendas'] = limpar_dataframe(v_raw)
+    st.session_state['df_clientes'] = limpar_dataframe(c_raw)
+    st.session_state['df_config'] = limpar_dataframe(cfg_raw)
+    
+    # --- 4. MELHORIA DE COMPLEXIDADE DE BUSCA ---
+    # Cria um dicionário {Nome: Telefone} para busca instantânea
+    st.session_state['dict_telefones'] = dict(zip(
+        st.session_state['df_clientes']['nome'], 
+        st.session_state['df_clientes']['telefone']
+    ))
+
+# Atalhos para facilitar o uso no código
+df_vendas = st.session_state['df_vendas']
+df_clientes = st.session_state['df_clientes']
+df_config = st.session_state['df_config']
+dict_telefones = st.session_state['dict_telefones']
 
 def atualizar_sistema():
+    """Limpa cache e estado para forçar recarregamento."""
     st.cache_data.clear()
+    for key in ['df_vendas', 'df_clientes', 'df_config', 'dict_telefones']:
+        if key in st.session_state:
+            del st.session_state[key]
     st.rerun()
 
 # --- FUNÇÕES AUXILIARES ---
+def extrair_valores_carne(carne_texto):
+    """Extrai total e pago do texto sem loops pesados."""
+    linhas = str(carne_texto).split('\n')
+    v_total = 0.0
+    v_pago = 0.0
+    for l in linhas:
+        if "/" in l:
+            try:
+                p = l.split()
+                valor = float(p[0])
+                v_total += valor
+                if "(Pago!)" in l:
+                    v_pago += valor
+            except: continue
+    return v_total, v_pago
+
 def formatar_telefone(num_texto):
     num_str = str(num_texto).replace(".0", "")
     apenas_numeros = re.sub(r'\D', '', num_str)
@@ -84,10 +105,6 @@ menu = st.sidebar.selectbox("Menu",
     ["Registrar Venda Nova", "Registrar Venda em Andamento", "Registrar Cliente", "Histórico de Vendas", "Configurações Pix"]
 )
 
-df_vendas = ler_vendas()
-df_clientes = ler_clientes()
-df_config = ler_config()
-
 pix_chave = str(df_config.at[0, 'chave_pix']) if not df_config.empty else ""
 pix_nome = str(df_config.at[0, 'nome_pix']) if not df_config.empty else ""
 
@@ -95,49 +112,36 @@ pix_nome = str(df_config.at[0, 'nome_pix']) if not df_config.empty else ""
 if menu == "Registrar Venda Nova":
     st.subheader("📝 Novo Registro Automático")
     if df_clientes.empty:
-        st.warning("Cadastre um cliente primeiro no menu 'Registrar Cliente'.")
+        st.warning("Cadastre um cliente primeiro.")
     else:
         col1, col2 = st.columns(2)
         with col1:
             cliente_sel = st.selectbox("Selecione o Cliente", df_clientes['nome'].unique())
             valor_t = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
-            freq = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
+            st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão"])
             data_p = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
         with col2:
             num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
             prod = st.text_area("Produtos")
 
         if st.button("🚀 Salvar Venda", type="primary"):
-            if not cliente_sel:
-                st.error("Selecione um cliente!")
-            elif valor_t is None or valor_t <= 0:
-                st.error("Insira um valor válido!")
-            elif not prod:
-                st.error("Descreva os produtos!")
-            else:
+            if cliente_sel and valor_t and prod:
                 valores = calcular_parcelas_inteiras(valor_t, int(num_p))
                 carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
                 for i, v in enumerate(valores):
                     data_f = (data_p + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
                     carne += f"{v:.2f} {data_f}\n"
+                
+                # ID Inteligente
                 id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
-                nova_v = pd.DataFrame([{
-                    "id": id_novo, 
-                    "cliente": cliente_sel, 
-                    "produtos": prod, 
-                    "valor": valor_t, 
-                    "data": datetime.now().strftime("%d/%m/%Y"), 
-                    "carne": carne, 
-                    "status": "Pendente"
-                }])
+                nova_v = pd.DataFrame([{"id": id_novo, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": "Pendente"}])
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
                 atualizar_sistema()
 
 # --- 2. REGISTRAR VENDA EM ANDAMENTO ---
 elif menu == "Registrar Venda em Andamento":
     st.subheader("📥 Importar do Caderno")
-    if df_clientes.empty:
-        st.warning("Cadastre um cliente primeiro!")
+    if df_clientes.empty: st.warning("Cadastre um cliente primeiro!")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -149,7 +153,6 @@ elif menu == "Registrar Venda em Andamento":
             c_pagas_p = st.number_input("Quantas JÁ PAGOU?", min_value=0, max_value=int(c_total_p))
             c_prod = st.text_area("Produtos")
 
-        st.write("---")
         datas_manuais = []
         for i in range(0, int(c_total_p), 3):
             cols = st.columns(3)
@@ -165,18 +168,10 @@ elif menu == "Registrar Venda em Andamento":
             carne = f"{c_prod}\nValor Total: R$ {c_valor:.2f}\n\n"
             for i, (v, d_s) in enumerate(zip(valores, datas_manuais)):
                 carne += f"{v:.2f} {d_s}{' (Pago!)' if i < c_pagas_p else ''}\n"
-            status = "Pago" if c_pagas_p == c_total_p else ("Pagamento Parcial" if c_pagas_p > 0 else "Pendente")
-            id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
-            nova_v = pd.DataFrame([{
-                "id": id_novo, 
-                "cliente": cliente_sel, 
-                "produtos": c_prod, 
-                "valor": c_valor, 
-                "data": c_data_orig.strftime("%d/%m/%Y"), 
-                "carne": carne, 
-                "status": status
-            }])
             
+            id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
+            status = "Pago" if c_pagas_p == c_total_p else ("Pagamento Parcial" if c_pagas_p > 0 else "Pendente")
+            nova_v = pd.DataFrame([{"id": id_novo, "cliente": cliente_sel, "produtos": c_prod, "valor": c_valor, "data": c_data_orig.strftime("%d/%m/%Y"), "carne": carne, "status": status}])
             conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
             atualizar_sistema()
 
@@ -215,7 +210,6 @@ elif menu == "Histórico de Vendas":
     mes_at, ano_at = hoje.month, hoje.year
     ini_q, fim_q = (1, 15) if hoje.day <= 15 else (16, calendar.monthrange(ano_at, mes_at)[1])
     
-    # 🚨 ALERTAS
     st.subheader("🚨 Alertas de Cobrança")
     alertas_found = False
     if not df_vendas.empty:
@@ -225,29 +219,21 @@ elif menu == "Histórico de Vendas":
                 if "/" in linha and "(Pago!)" not in linha:
                     try:
                         p = linha.split()
-                        v_p = p[0]
                         d_p, m_p = map(int, p[1].split('/'))
-
-                        # Lógica dinâmica: usa o ano atual (ano_at) que você já definiu no topo do menu
-                        ano_referencia = ano_at 
-
-                        # Segurança: Se a parcela for de Janeiro (1) e hoje for Dezembro (12), 
-                        # o sistema entende que a parcela é do ano que vem.
-                        if m_p < mes_at and mes_at == 12:
-                            ano_referencia += 1
-
-                        dt_p = datetime(ano_referencia, m_p, d_p)
+                        ano_ref = ano_at + 1 if m_p < mes_at and mes_at == 12 else ano_at
+                        dt_p = datetime(ano_ref, m_p, d_p)
+                        
                         if dt_p <= hoje_check:
                             alertas_found = True
                             st.warning(f"Atraso: {row['cliente']} (R$ {p[0]} em {p[1]})")
-                            tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
-                            tel_f = str(tel_c[0]) if len(tel_c) > 0 else ""
+                            # BUSCA RÁPIDA (Sugestão 4)
+                            tel_f = dict_telefones.get(row['cliente'], "")
                             
-                            c_alt1, c_alt2 = st.columns(2)
-                            with c_alt1:
-                                msg_c = urllib.parse.quote(f"Olá {row['cliente']}! Sua parcela de R$ {p[0]} venceu em {p[1]}. Segue o resumo:\n\n{carne}")
-                                st.link_button(f"📲 Cobrar {row['cliente']}", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_c}")
-                            with c_alt2:
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                msg = urllib.parse.quote(f"Olá {row['cliente']}! Parcela de R$ {p[0]} venceu em {p[1]}.\n\n{carne}")
+                                st.link_button(f"📲 Cobrar", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
+                            with c2:
                                 if pix_chave:
                                     msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, p[0]))
                                     st.link_button("💠 Enviar Pix", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
@@ -257,17 +243,19 @@ elif menu == "Histórico de Vendas":
     st.divider()
 
     # 📊 RELATÓRIO
-    st.subheader(f"📊 Resumo Financeiro da Quinzena ({ini_q:02d} a {fim_q:02d}/{mes_at:02d})")
+    st.subheader(f"📊 Resumo Financeiro da Quinzena")
     vol, rec = 0.0, 0.0
     if not df_vendas.empty:
+        # Usamos o helper do carnê para somar tudo (Sugestão 5)
         for _, row in df_vendas.iterrows():
-            for linha in str(row['carne']).split('\n'):
-                if "/" in linha:
+            linhas = str(row['carne']).split('\n')
+            for l in linhas:
+                if "/" in l:
                     try:
-                        p = linha.split(); v = float(p[0]); d, m = map(int, p[1].split('/'))
+                        p = l.split(); v = float(p[0]); d, m = map(int, p[1].split('/'))
                         if m == mes_at and ini_q <= d <= fim_q:
                             vol += v
-                            if "(Pago!)" in linha: rec += v
+                            if "(Pago!)" in l: rec += v
                     except: continue
         
         m1, m2, m3 = st.columns(3)
@@ -279,35 +267,51 @@ elif menu == "Histórico de Vendas":
     busca = st.text_input("🔍 Buscar Cliente no Histórico")
     
     if not df_vendas.empty:
-        df_f = df_vendas[df_vendas['cliente'].astype(str).str.contains(busca, case=False)] if busca else df_vendas
+        # Busca otimizada (como o DF já foi limpo no início, não precisa de .astype(str))
+        df_f = df_vendas[df_vendas['cliente'].str.contains(busca, case=False)] if busca else df_vendas
         
-        for i, (index, row) in enumerate(df_f.iterrows()):
-            edit_key = f"edit_mode_{row['id']}_{i}" 
-            if edit_key not in st.session_state: st.session_state[edit_key] = False
+        # Ordenar para ver as mais recentes primeiro (Sugestão adicional)
+        df_f = df_f.sort_values(by='id', ascending=False)
 
-            with st.expander(f"{row['cliente']} - R$ {row['valor']} (Venda em {row['data']})"):
+        for i, (index, row) in enumerate(df_f.iterrows()):
+            edit_key = f"edit_mode_{row['id']}" # Simplificado: usar apenas o ID único
+            if edit_key not in st.session_state: 
+                st.session_state[edit_key] = False
+
+            # --- MELHORIA VISUAL: Barra de Progresso ---
+            v_total, v_pago = extrair_valores_carne(row['carne'])
+            percentual = v_pago / v_total if v_total > 0 else 0.0
+            
+            label_expander = f"{row['cliente']} - R$ {row['valor']} (Progresso: {int(percentual*100)}%)"
+            
+            with st.expander(label_expander):
                 if st.session_state[edit_key]:
                     st.info("💡 Modo de edição ativo.")
-                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
-                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
+                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_edit_{row['id']}")
+                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}")
                     
                     col_save1, col_save2 = st.columns(2)
-                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
+                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}", type="primary"):
                         df_vendas.at[index, 'valor'] = str(novo_valor)
                         df_vendas.at[index, 'carne'] = novo_carne
                         conn.update(worksheet="vendas", data=df_vendas.astype(str))
                         st.session_state[edit_key] = False
                         atualizar_sistema()
-                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}_{i}"):
+                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}"):
                         st.session_state[edit_key] = False
                         st.rerun()
                 else:
+                    # Exibe a barra de progresso visual
+                    st.progress(percentual)
                     st.code(row['carne'])
                     
-                    # ADICIONADO: Botão de excluir na 5ª coluna
                     c_h = st.columns([1, 1, 1, 1, 1]) 
+                    
+                    # BUSCA O TELEFONE NO DICIONÁRIO (Sugestão 4 - Velocidade Máxima)
+                    tel_f = dict_telefones.get(row['cliente'], "")
+
                     with c_h[0]: # PAGAR
-                        if st.button("💰", key=f"p_{row['id']}_{i}"):
+                        if st.button("💰", key=f"p_{row['id']}"):
                             linhas = str(row['carne']).split('\n')
                             nova_c, alt = [], False
                             for l in linhas:
@@ -315,28 +319,31 @@ elif menu == "Histórico de Vendas":
                                     l += " (Pago!)"; alt = True
                                 nova_c.append(l)
                             df_vendas.at[index, 'carne'] = "\n".join(nova_c)
+                            # Atualiza status automaticamente
                             df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
-                            conn.update(worksheet="vendas", data=df_vendas.astype(str)); atualizar_sistema()
+                            conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                            atualizar_sistema()
+
                     with c_h[1]: # EDITAR
-                        if st.button("✏️", key=f"btn_edit_{row['id']}_{i}"):
+                        if st.button("✏️", key=f"btn_edit_{row['id']}"):
                             st.session_state[edit_key] = True
                             st.rerun()
-                    with c_h[2]: # WHATSAPP
-                        tel_c = df_clientes[df_clientes['nome'] == row['cliente']]['telefone'].values
-                        tel_f = str(tel_c[0]) if len(tel_c) > 0 else ""
+
+                    with c_h[2]: # WHATSAPP (Usa o tel_f otimizado)
                         msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
                         st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
-                    with c_h[3]: # PIX
+
+                    with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
                             msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, row['valor']))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
-                    with c_h[4]: # EXCLUIR (O botão que voltou!)
+
+                    with c_h[4]: # EXCLUIR
                         with st.popover("🗑️"):
-                            st.warning("Excluir esta venda?")
-                            if st.button("Sim, apagar", key=f"conf_del_{row['id']}_{i}", type="primary"):
+                            st.warning("Excluir venda?")
+                            if st.button("Sim", key=f"conf_del_{row['id']}", type="primary"):
                                 df_vendas = df_vendas.drop(index)
                                 conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                                st.success("Excluído!")
                                 atualizar_sistema()
 
 # --- 5. CONFIGURAÇÕES PIX ---
