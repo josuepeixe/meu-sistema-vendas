@@ -120,7 +120,16 @@ if menu == "Registrar Venda Nova":
                 for i, v in enumerate(valores):
                     data_f = (data_p + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
                     carne += f"{v:.2f} {data_f}\n"
-                nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": "Pendente"}])
+                id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
+                nova_v = pd.DataFrame([{
+                    "id": id_novo, 
+                    "cliente": cliente_sel, 
+                    "produtos": prod, 
+                    "valor": valor_t, 
+                    "data": datetime.now().strftime("%d/%m/%Y"), 
+                    "carne": carne, 
+                    "status": "Pendente"
+                }])
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
                 atualizar_sistema()
 
@@ -157,7 +166,17 @@ elif menu == "Registrar Venda em Andamento":
             for i, (v, d_s) in enumerate(zip(valores, datas_manuais)):
                 carne += f"{v:.2f} {d_s}{' (Pago!)' if i < c_pagas_p else ''}\n"
             status = "Pago" if c_pagas_p == c_total_p else ("Pagamento Parcial" if c_pagas_p > 0 else "Pendente")
-            nova_v = pd.DataFrame([{"id": len(df_vendas)+1, "cliente": cliente_sel, "produtos": c_prod, "valor": c_valor, "data": c_data_orig.strftime("%d/%m/%Y"), "carne": carne, "status": status}])
+            id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
+            nova_v = pd.DataFrame([{
+                "id": id_novo, 
+                "cliente": cliente_sel, 
+                "produtos": c_prod, 
+                "valor": c_valor, 
+                "data": c_data_orig.strftime("%d/%m/%Y"), 
+                "carne": carne, 
+                "status": status
+            }])
+            
             conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
             atualizar_sistema()
 
