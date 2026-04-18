@@ -410,7 +410,7 @@ elif menu == "Histórico de Vendas":
                         st.session_state[txt_key] = txt_recalc
                         st.rerun()
 
-                    novo_carne_txt = st.text_area("Detalhamento", value=st.session_state[txt_key], height=150, key=f"area_{row['id']}_{i}")
+                    novo_carne_txt = st.text_area("Detalhamento", key=txt_key, height=150")
 
                     c_save1, c_save2 = st.columns(2)
                     with c_save1:
