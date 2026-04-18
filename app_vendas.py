@@ -348,6 +348,7 @@ elif menu == "Histórico de Vendas":
         # Ordenar para ver as mais recentes primeiro (Sugestão adicional)
         df_f = df_f.sort_values(by='id', ascending=False)
 
+        # --- LOOP DE VENDAS NO HISTÓRICO ---
         for i, (index, row) in enumerate(df_f.iterrows()):
             edit_key = f"edit_mode_{row['id']}_{i}"
             if edit_key not in st.session_state: 
@@ -365,13 +366,14 @@ elif menu == "Histórico de Vendas":
             label_expander = f"{row['cliente']} - R$ {row['valor']} ({int(percentual*100)}% Pago)"
             
             with st.expander(label_expander):
-                # VERIFICAÇÃO DO MODO: EDIÇÃO OU VISUALIZAÇÃO
                 if st.session_state[edit_key]:
                     # --- MODO DE EDIÇÃO ---
-                    st.info("💡 Modo de Edição")
-                    txt_key = f"txt_edit_{row['id']}"
+                    st.info("💡 Modo de Edição Inteligente")
                     
-                    # Converte JSON para TEXTO ao entrar na edição
+                    # Chave única para sincronizar o campo de texto
+                    txt_key = f"txt_val_{row['id']}_{i}"
+                    
+                    # Carrega o JSON para o formato de texto na primeira vez que abre
                     if txt_key not in st.session_state:
                         try:
                             p_init = json.loads(row['carne'])
@@ -381,7 +383,7 @@ elif menu == "Histórico de Vendas":
                                 txt_init += f"{p['v']:.2f} {p['d']}{s_txt}\n"
                             st.session_state[txt_key] = txt_init
                         except:
-                            st.session_state[txt_key] = row['carne']
+                            st.session_state[txt_key] = str(row['carne'])
                     
                     col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
                     with col_ed1:
@@ -392,10 +394,12 @@ elif menu == "Histórico de Vendas":
                         if n_freq == "Quinzena":
                             n_dia_base = st.selectbox("Dia Base", [1, 15], key=f"d_in_{row['id']}_{i}")
                     with col_ed3:
+                        # Conta parcelas no texto atual
                         qtd_at = sum(1 for l in st.session_state[txt_key].split('\n') if "/" in l)
                         n_parc = st.number_input("Parcelas", min_value=1, value=max(1, qtd_at), key=f"q_in_{row['id']}_{i}")
 
-                    if st.button("🔄 Recalcular", key=f"recalc_{row['id']}_{i}", use_container_width=True):
+                    # --- BOTÃO RECALCULAR ---
+                    if st.button("🔄 Recalcular Parcelas", key=f"recalc_{row['id']}_{i}", use_container_width=True):
                         v_recalc = calcular_parcelas_inteiras(n_valor, int(n_parc))
                         data_c = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
                         if n_freq == "Quinzena": data_c = data_c.replace(day=n_dia_base)
@@ -407,15 +411,19 @@ elif menu == "Histórico de Vendas":
                                 if data_c.day == 1: data_c = data_c.replace(day=15)
                                 else: data_c = (data_c + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
                             else: data_c = data_c + dateutil.relativedelta.relativedelta(months=1)
+                        
+                        # Atualiza a chave do session_state e recarrega a página
                         st.session_state[txt_key] = txt_recalc
                         st.rerun()
 
-                    novo_carne_txt = st.text_area("Detalhamento", key=txt_key, height=150")
+                    # Campo de texto vinculado à chave txt_key
+                    novo_carne_txt = st.text_area("Detalhamento do Carnê", key=txt_key, height=150)
 
                     c_save1, c_save2 = st.columns(2)
                     with c_save1:
-                        if st.button("💾 Salvar", key=f"sv_{row['id']}_{i}", type="primary", use_container_width=True):
-                            linhas = novo_carne_txt.split('\n')
+                        if st.button("💾 Salvar Alterações", key=f"sv_{row['id']}_{i}", type="primary", use_container_width=True):
+                            # Converte o texto final de volta para JSON para salvar no Sheets
+                            linhas = st.session_state[txt_key].split('\n')
                             js_lista = []
                             for c_idx, linha in enumerate(linhas):
                                 if "/" in linha:
@@ -433,12 +441,13 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'valor'] = str(n_valor)
                             df_vendas.at[index, 'carne'] = json.dumps(js_lista)
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                            del st.session_state[txt_key]
+                            
+                            if txt_key in st.session_state: del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             atualizar_sistema()
                     with c_save2:
                         if st.button("❌ Cancelar", key=f"cn_{row['id']}_{i}", use_container_width=True):
-                            del st.session_state[txt_key]
+                            if txt_key in st.session_state: del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             st.rerun()
 
@@ -468,7 +477,7 @@ elif menu == "Histórico de Vendas":
                                     item['p'] = True
                                     break
                             df_vendas.at[index, 'carne'] = json.dumps(p_at)
-                            df_vendas.at[index, 'status'] = "Pago" if all(x['p'] for x in p_at) else "Parcial"
+                            df_vendas.at[index, 'status'] = "Pago" if all(x['p'] for x in p_at) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
                             atualizar_sistema()
 
