@@ -6,6 +6,7 @@ import dateutil.relativedelta
 import urllib.parse
 import calendar
 import re
+import json
 
 # Configuração da página
 st.set_page_config(page_title="Gestão de Vendas Master", layout="wide", page_icon="🚀")
@@ -138,26 +139,28 @@ if menu == "Registrar Venda Nova":
         if st.button("🚀 Salvar Venda", type="primary"):
             if cliente_sel and valor_t and prod:
                 valores = calcular_parcelas_inteiras(valor_t, int(num_p))
-                carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
                 
-                # --- LÓGICA DE GERAÇÃO DAS DATAS ---
+                # Nova lógica JSON
+                lista_parcelas = []
                 data_corrente = data_p
+                
                 for i in range(int(num_p)):
-                    data_f = data_corrente.strftime("%d/%m")
-                    carne += f"{valores[i]:.2f} {data_f}\n"
+                    lista_parcelas.append({
+                        "n": i + 1,
+                        "v": float(valores[i]),
+                        "d": data_corrente.strftime("%d/%m"),
+                        "p": False  # Inicia como não pago
+                    })
                     
+                    # Lógica de data (Quinzena ou Mensal)
                     if freq == "Quinzena":
-                        # Alterna entre dia 1 e 15
                         if data_corrente.day == 1:
                             data_corrente = data_corrente.replace(day=15)
                         else:
-                            # Se era dia 15, pula para o dia 1 do PRÓXIMO mês
                             data_corrente = (data_corrente + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
                     else:
-                        # Padrão mensal: pula um mês cheio
                         data_corrente = data_corrente + dateutil.relativedelta.relativedelta(months=1)
-
-                # Salva no Banco de Dados
+        
                 id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
                 nova_v = pd.DataFrame([{
                     "id": id_novo, 
@@ -165,10 +168,9 @@ if menu == "Registrar Venda Nova":
                     "produtos": prod, 
                     "valor": valor_t, 
                     "data": datetime.now().strftime("%d/%m/%Y"), 
-                    "carne": carne, 
+                    "carne": json.dumps(lista_parcelas), # Salva como JSON
                     "status": "Pendente"
                 }])
-                
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
                 atualizar_sistema()
 
@@ -248,44 +250,61 @@ elif menu == "Histórico de Vendas":
     alertas_found = False
     if not df_vendas.empty:
         for idx_alerta, (index, row) in enumerate(df_vendas.iterrows()):
-            carne = str(row['carne'])
-            for linha in carne.split('\n'):
-                if "/" in linha and "(Pago!)" not in linha:
+            # 1. Transforma o JSON da planilha em lista do Python
+            try:
+                parcelas = json.loads(row['carne'])
+            except:
+                continue # Pula caso a linha não seja um JSON válido
+
+            for p in parcelas:
+                # 2. Verifica se a parcela NÃO está paga (p['p'] == False)
+                if not p['p']:
                     try:
-                        p = linha.split()
-                        d_p, m_p = map(int, p[1].split('/'))
+                        # p['d'] contém a data (ex: "15/05")
+                        d_p, m_p = map(int, p['d'].split('/'))
                         ano_ref = ano_at + 1 if m_p < mes_at and mes_at == 12 else ano_at
                         dt_p = datetime(ano_ref, m_p, d_p)
                         
                         if dt_p <= hoje_check:
                             alertas_found = True
-                            st.warning(f"Atraso: {row['cliente']} (R$ {p[0]} em {p[1]})")
-                            # BUSCA RÁPIDA (Sugestão 4)
+                            st.warning(f"Atraso: {row['cliente']} (R$ {p['v']} em {p['d']})")
+                            
                             tel_f = dict_telefones.get(row['cliente'], "")
                             
+                            # 3. Criamos o resumo em texto apenas para a mensagem do WhatsApp
+                            carne_formatada = ""
+                            for parc in parcelas:
+                                status_txt = " (Pago!)" if parc['p'] else ""
+                                carne_formatada += f"{parc['v']:.2f} {parc['d']}{status_txt}\n"
+
                             c1, c2 = st.columns(2)
                             with c1:
                                 texto_cobranca = (
                                     f"⚠️ *AVISO DE VENCIMENTO* ⚠️\n\n"
                                     f"Olá, *{row['cliente']}*! Tudo bem?\n"
-                                    f"notamos que uma parcela sua venceu recentemente:\n\n"
-                                    f"💵 *Valor:* R$ {p[0]}\n"
-                                    f"📅 *Vencimento:* {p[1]}\n"
+                                    f"Notamos que uma parcela sua venceu recentemente:\n\n"
+                                    f"💵 *Valor:* R$ {p['v']:.2f}\n"
+                                    f"📅 *Vencimento:* {p['d']}\n"
                                     f"------------------------------------------\n"
                                     f"📑 *RESUMO DO SEU CARNÊ:*\n"
-                                    f"{carne}\n"
+                                    f"```\n{carne_formatada}```\n" # Usamos crases para alinhar as colunas
                                     f"------------------------------------------\n\n"
                                     f"Poderia nos confirmar se o pagamento já foi feito? Se precisar do PIX, é só avisar! 😊"
                                 )
                                 
                                 msg_c = urllib.parse.quote(texto_cobranca)
                                 st.link_button(f"📲 Cobrar {row['cliente']}", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_c}")
+                            
                             with c2:
                                 if pix_chave:
-                                    msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, p[0]))
+                                    # p['v'] é o valor numérico da parcela atrasada
+                                    msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, p['v']))
                                     st.link_button("💠 Enviar Pix", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
-                    except: continue
-    if not alertas_found: st.success("✅ Tudo em dia!")
+                    except: 
+                        continue
+
+    if not alertas_found: 
+        st.success("✅ Tudo em dia!")
 
     st.divider()
 
@@ -354,21 +373,19 @@ elif menu == "Histórico de Vendas":
                         n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=max(1, qtd_atual), key=f"q_input_{row['id']}")
                 
                     # --- LÓGICA DE RECALCULO CORRIGIDA (QUINZENA) ---
-                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}", use_container_width=True):
+                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}_{i}"):
                         novos_v = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
+                        data_corrente = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+                        if n_freq == "Quinzena": data_corrente = data_corrente.replace(day=n_dia_base)
                         
-                        # Define a data inicial (próximo mês)
-                        data_base = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
-                        if n_freq == "Quinzena":
-                            data_corrente = data_base.replace(day=n_dia_base)
-                        else:
-                            data_corrente = data_base # Mantém o dia atual no mês que vem
-                
-                        novo_texto = f"{novo_prod}\nValor Total: R$ {n_valor:.2f}\n\n"
-                        
-                        for i in range(int(n_parcelas)):
-                            data_f = data_corrente.strftime("%d/%m")
-                            novo_texto += f"{novos_v[i]:.2f} {data_f}\n"
+                        novas_parcelas_json = []
+                        for idx in range(int(n_parcelas)):
+                            novas_parcelas_json.append({
+                                "n": idx + 1,
+                                "v": float(novos_v[idx]),
+                                "d": data_corrente.strftime("%d/%m"),
+                                "p": False
+                            })
                             
                             # Lógica de progressão de datas
                             if n_freq == "Quinzena":
@@ -379,7 +396,7 @@ elif menu == "Histórico de Vendas":
                             else:
                                 data_corrente = data_corrente + dateutil.relativedelta.relativedelta(months=1)
                         
-                        st.session_state[txt_key] = novo_texto
+                        st.session_state[txt_key] = json.dumps(novas_parcelas_json)
                         st.rerun()
                 
                     # Exibe o campo de texto para ajustes manuais finos
@@ -416,15 +433,14 @@ elif menu == "Histórico de Vendas":
 
                     with c_h[0]: # PAGAR
                         if st.button("💰", key=f"p_{row['id']}_{i}"):
-                            linhas = str(row['carne']).split('\n')
-                            nova_c, alt = [], False
-                            for l in linhas:
-                                if "/" in l and "(Pago!)" not in l and not alt:
-                                    l += " (Pago!)"; alt = True
-                                nova_c.append(l)
-                            df_vendas.at[index, 'carne'] = "\n".join(nova_c)
-                            # Atualiza status automaticamente
-                            df_vendas.at[index, 'status'] = "Pago" if not any("/" in l and "(Pago!)" not in l for l in nova_c) else "Pagamento Parcial"
+                            parcelas = json.loads(row['carne'])
+                            for p in parcelas:
+                                if not p['p']:
+                                    p['p'] = True
+                                    break
+                            
+                            df_vendas.at[index, 'carne'] = json.dumps(parcelas)
+                            df_vendas.at[index, 'status'] = "Pago" if all(p['p'] for p in parcelas) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
                             atualizar_sistema()
 
@@ -453,36 +469,20 @@ elif menu == "Histórico de Vendas":
 
                     with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
-                            # 1. Pegamos o carnê e quebramos em linhas
-                            linhas_do_carne = str(row['carne']).split('\n')
+                            parcelas = json.loads(row['carne'])
+                            # Pega a primeira que não está paga
+                            proxima = next((p for p in parcelas if not p['p']), None)
+                            valor_pix = proxima['v'] if proxima else row['valor']
                             
-                            # 2. Começamos com o valor total só por segurança, caso o loop falhe
-                            valor_final_pix = row['valor']
-                            
-                            # 3. Procuramos a parcela correta
-                            for linha in linhas_do_carne:
-                                # Critério: Tem que ter uma data (/) e NÃO pode estar paga
-                                # Além disso, a linha não pode ser o cabeçalho "Valor Total: R$ ..."
-                                if "/" in linha and "(Pago!)" not in linha and "Total:" not in linha:
-                                    partes = linha.split()
-                                    if len(partes) > 0:
-                                        # Pegamos apenas o número, removendo "R$" se existir por erro
-                                        valor_sujo = partes[0].replace("R$", "").strip()
-                                        # Substituímos vírgula por ponto para o Python entender como número
-                                        valor_final_pix = valor_sujo.replace(",", ".")
-                                        break # Para na primeira parcela aberta que encontrar
-                            
-                            # 4. Gera a mensagem com o valor filtrado
-                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, valor_final_pix))
+                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, valor_pix))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
-
-                    with c_h[4]: # EXCLUIR
-                        with st.popover("🗑️"):
-                            st.warning("Excluir venda?")
-                            if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
-                                df_vendas = df_vendas.drop(index)
-                                conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                                atualizar_sistema()
+                                        with c_h[4]: # EXCLUIR
+                                            with st.popover("🗑️"):
+                                                st.warning("Excluir venda?")
+                                                if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
+                                                    df_vendas = df_vendas.drop(index)
+                                                    conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                                                    atualizar_sistema()
 
 # --- 5. CONFIGURAÇÕES PIX ---
 elif menu == "Configurações Pix":
