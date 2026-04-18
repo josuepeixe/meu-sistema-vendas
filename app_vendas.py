@@ -274,8 +274,12 @@ elif menu == "Histórico de Vendas":
                             # 3. Criamos o resumo em texto apenas para a mensagem do WhatsApp
                             carne_formatada = ""
                             for parc in parcelas:
-                                status_txt = " (Pago!)" if parc['p'] else ""
-                                carne_formatada += f"{parc['v']:.2f} {parc['d']}{status_txt}\n"
+                                # Ícones: ✅ para pago, ⏳ para o que falta pagar
+                                icone = "✅" if parc['p'] else "⏳"
+                                status_txt = " (Pago)" if parc['p'] else ""
+                                
+                                # Monta a linha: ✅ R$ 250.00 - 15/05 (Pago)
+                                carne_formatada += f"{icone} R$ {parc['v']:.2f} - {parc['d']}{status_txt}\n"
 
                             c1, c2 = st.columns(2)
                             with c1:
@@ -286,8 +290,8 @@ elif menu == "Histórico de Vendas":
                                     f"💵 *Valor:* R$ {p['v']:.2f}\n"
                                     f"📅 *Vencimento:* {p['d']}\n"
                                     f"------------------------------------------\n"
-                                    f"📑 *RESUMO DO SEU CARNÊ:*\n"
-                                    f"```\n{carne_formatada}```\n" # Usamos crases para alinhar as colunas
+                                    f"📑 *SITUAÇÃO DO SEU CARNÊ:*\n"
+                                    f"```\n{carne_formatada}```\n" # As crases mantêm o texto alinhado no zap
                                     f"------------------------------------------\n\n"
                                     f"Poderia nos confirmar se o pagamento já foi feito? Se precisar do PIX, é só avisar! 😊"
                                 )
@@ -467,16 +471,23 @@ elif menu == "Histórico de Vendas":
 
                     with c_h[2]: # WHATSAPP (Usa o tel_f otimizado)
                         tel_f = dict_telefones.get(row['cliente'], "")
-                        # Criando uma mensagem super organizada
+    
+                        # 1. Traduz o JSON para um texto legível
+                        parcelas_list = json.loads(row['carne'])
+                        carne_txt = ""
+                        for p in parcelas_list:
+                            icone = "✅" if p['p'] else "⏳"
+                            status_v = " (Pago)" if p['p'] else ""
+                            carne_txt += f"{icone} R$ {p['v']:.2f} - {p['d']}{status_v}\n"
+                    
+                        # 2. Monta a mensagem completa
                         texto_whatsapp = (
-                            f"💠 *RESUMO DA COMPRA* 💠\n\n"
+                            f"💠 *RESUMO DE COMPRA* 💠\n\n"
                             f"👤 *Cliente:* {row['cliente']}\n"
-                            f"📅 *Data da Venda:* {row['data']}\n"
                             f"------------------------------------------\n"
-                            f"📋 *DETALHAMENTO:*\n"
-                            f"{row['carne']}\n"
-                            f"------------------------------------------\n"
-                            f"✅ *Status Atual:* {row['status']}\n\n"
+                            f"📑 *DETALHAMENTO DO CARNÊ:*\n\n"
+                            f"{carne_txt}" # Aqui entra a tradução que fizemos acima
+                            f"------------------------------------------\n\n"
                             f"Qualquer dúvida, estou à disposição! 😊"
                         )
                         
