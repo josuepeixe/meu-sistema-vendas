@@ -286,12 +286,17 @@ elif menu == "Histórico de Vendas":
                                 texto_cobranca = (
                                     f"⚠️ *AVISO DE VENCIMENTO* ⚠️\n\n"
                                     f"Olá, *{row['cliente']}*! Tudo bem?\n"
-                                    f"Notamos que uma parcela sua venceu recentemente:\n\n"
+                                    f"Notamos uma pendência em sua compra:\n\n"
+                                    f"📅 *Data da Venda:* {row['data']}\n"
+                                    f"📦 *Produtos:* {row['produtos']}\n"
+                                    f"💰 *Valor Total da Compra:* R$ {float(row['valor']):.2f}\n"
+                                    f"------------------------------------------\n"
+                                    f"📌 *DETALHE DA PARCELA VENCIDA:*\n"
                                     f"💵 *Valor:* R$ {p['v']:.2f}\n"
                                     f"📅 *Vencimento:* {p['d']}\n"
                                     f"------------------------------------------\n"
                                     f"📑 *SITUAÇÃO DO SEU CARNÊ:*\n"
-                                    f"```\n{carne_formatada}```\n" # As crases mantêm o texto alinhado no zap
+                                    f"```\n{carne_formatada}```\n"
                                     f"------------------------------------------\n\n"
                                     f"Poderia nos confirmar se o pagamento já foi feito? Se precisar do PIX, é só avisar! 😊"
                                 )
@@ -482,13 +487,17 @@ elif menu == "Histórico de Vendas":
                     
                         # 2. Monta a mensagem completa
                         texto_whatsapp = (
-                            f"💠 *RESUMO DE COMPRA* 💠\n\n"
+                            f"💠 *RESUMO GERAL DA COMPRA* 💠\n\n"
                             f"👤 *Cliente:* {row['cliente']}\n"
+                            f"📅 *Data da Venda:* {row['data']}\n"
+                            f"📦 *Produtos:* {row['produtos']}\n"
+                            f"💰 *Valor Total:* R$ {float(row['valor']):.2f}\n"
                             f"------------------------------------------\n"
                             f"📑 *DETALHAMENTO DO CARNÊ:*\n\n"
-                            f"{carne_txt}" # Aqui entra a tradução que fizemos acima
-                            f"------------------------------------------\n\n"
-                            f"Qualquer dúvida, estou à disposição! 😊"
+                            f"```\n{carne_txt}```\n" # Monospace para alinhar datas e valores
+                            f"------------------------------------------\n"
+                            f"✅ *Status:* {row['status']}\n\n"
+                            f"Qualquer dúvida sobre os pagamentos, é só me chamar! 😊"
                         )
                         
                         msg = urllib.parse.quote(texto_whatsapp)
