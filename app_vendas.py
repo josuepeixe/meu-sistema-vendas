@@ -353,7 +353,7 @@ elif menu == "Histórico de Vendas":
             with st.expander(label_expander):
                 if st.session_state[edit_key]:
                     st.info("💡 Modo de Edição")
-    
+            
                     txt_key = f"txt_edit_{row['id']}"
                     if txt_key not in st.session_state:
                         st.session_state[txt_key] = row['carne']
@@ -361,18 +361,20 @@ elif menu == "Histórico de Vendas":
                     col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
                     with col_ed1:
                         novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_input_{row['id']}")
-                        # Sugestão: Adicionamos a escolha da frequência na edição
                         n_freq = st.radio("Nova Frequência", ["Mensal", "Quinzena"], horizontal=True, key=f"f_input_{row['id']}")
                     with col_ed2:
                         n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_input_{row['id']}")
                         if n_freq == "Quinzena":
                             n_dia_base = st.selectbox("Dia Base", [1, 15], key=f"d_input_{row['id']}")
                     with col_ed3:
-                        # Conta parcelas atuais para sugerir no campo
-                        qtd_atual = sum(1 for l in str(st.session_state[txt_key]).split('\n') if "/" in l)
+                        # --- AJUSTE: Agora contamos o tamanho da lista JSON ---
+                        try:
+                            dados_temp = json.loads(st.session_state[txt_key])
+                            qtd_atual = len(dados_temp)
+                        except:
+                            qtd_atual = 1
                         n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=max(1, qtd_atual), key=f"q_input_{row['id']}")
-                
-                    # --- LÓGICA DE RECALCULO CORRIGIDA (QUINZENA) ---
+            
                     if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}_{i}"):
                         novos_v = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
                         data_corrente = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
@@ -387,21 +389,17 @@ elif menu == "Histórico de Vendas":
                                 "p": False
                             })
                             
-                            # Lógica de progressão de datas
                             if n_freq == "Quinzena":
-                                if data_corrente.day == 1:
-                                    data_corrente = data_corrente.replace(day=15)
-                                else:
-                                    data_corrente = (data_corrente + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+                                if data_corrente.day == 1: data_corrente = data_corrente.replace(day=15)
+                                else: data_corrente = (data_corrente + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
                             else:
                                 data_corrente = data_corrente + dateutil.relativedelta.relativedelta(months=1)
                         
                         st.session_state[txt_key] = json.dumps(novas_parcelas_json)
                         st.rerun()
-                
-                    # Exibe o campo de texto para ajustes manuais finos
-                    novo_carne = st.text_area("Detalhamento do Carnê", key=txt_key, height=200)
-                
+            
+                    novo_carne = st.text_area("Detalhamento do Carnê (JSON)", key=txt_key, height=200)
+            
                     st.divider()
                     col_save1, col_save2 = st.columns(2)
                     with col_save1:
@@ -409,28 +407,47 @@ elif menu == "Histórico de Vendas":
                             df_vendas.at[index, 'produtos'] = novo_prod
                             df_vendas.at[index, 'valor'] = str(n_valor)
                             df_vendas.at[index, 'carne'] = st.session_state[txt_key]
-                            
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                            
                             if txt_key in st.session_state: del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             atualizar_sistema()
-                            
                     with col_save2:
                         if st.button("❌ Cancelar", key=f"cancel_{row['id']}", use_container_width=True):
                             if txt_key in st.session_state: del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             st.rerun()
+            
                 else:
-                    # Exibe a barra de progresso visual
+                    # --- MODO DE VISUALIZAÇÃO: ONDE A MÁGICA ACONTECE ---
                     st.progress(percentual)
-                    st.code(row['carne'])
                     
+                    try:
+                        # 1. Carregamos o JSON
+                        parcelas_lista = json.loads(row['carne'])
+                        
+                        # 2. Criamos o texto formatado para o usuário
+                        texto_bonito = f"📋 {row['produtos']}\n"
+                        texto_bonito += f"💰 Valor Total: R$ {float(row['valor']):.2f}\n"
+                        texto_bonito += "-" * 35 + "\n"
+                        
+                        for p in parcelas_lista:
+                            icone = "✅" if p['p'] else "⏳"
+                            pago_aviso = " (Pago!)" if p['p'] else ""
+                            # Formata: ✅ 250.00 | 15/06 (Pago!)
+                            texto_bonito += f"{icone} {p['v']:.2f}  |  {p['d']}{pago_aviso}\n"
+                        
+                        # 3. Exibimos o texto formatado
+                        st.code(texto_bonito, language="text")
+                        
+                    except:
+                        # Caso algum dado antigo ainda não seja JSON
+                        st.warning("Formato antigo detectado:")
+                        st.code(row['carne'])
+                    
+                    # --- COLUNAS DE BOTÕES ---
                     c_h = st.columns([1, 1, 1, 1, 1]) 
-                    
-                    # BUSCA O TELEFONE NO DICIONÁRIO (Sugestão 4 - Velocidade Máxima)
                     tel_f = dict_telefones.get(row['cliente'], "")
-
+            
                     with c_h[0]: # PAGAR
                         if st.button("💰", key=f"p_{row['id']}_{i}"):
                             parcelas = json.loads(row['carne'])
@@ -438,12 +455,11 @@ elif menu == "Histórico de Vendas":
                                 if not p['p']:
                                     p['p'] = True
                                     break
-                            
                             df_vendas.at[index, 'carne'] = json.dumps(parcelas)
                             df_vendas.at[index, 'status'] = "Pago" if all(p['p'] for p in parcelas) else "Pagamento Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
                             atualizar_sistema()
-
+            
                     with c_h[1]: # EDITAR
                         if st.button("✏️", key=f"btn_edit_{row['id']}_{i}"):
                             st.session_state[edit_key] = True
