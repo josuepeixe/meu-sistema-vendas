@@ -453,20 +453,27 @@ elif menu == "Histórico de Vendas":
 
                     with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
-                            # 1. Lógica para encontrar o valor da primeira parcela pendente no carnê
-                            linhas_carne = str(row['carne']).split('\n')
-                            valor_da_parcela = row['valor']  # Valor padrão (caso algo dê errado)
+                            # 1. Pegamos o carnê e quebramos em linhas
+                            linhas_do_carne = str(row['carne']).split('\n')
                             
-                            for l in linhas_carne:
-                                if "/" in l and "(Pago!)" not in l:
-                                    try:
-                                        # Pega o primeiro elemento da linha (o valor)
-                                        valor_da_parcela = l.split()[0]
-                                        break # Para na primeira que encontrar pendente
-                                    except:
-                                        continue
-                                        
-                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, row['valor']))
+                            # 2. Começamos com o valor total só por segurança, caso o loop falhe
+                            valor_final_pix = row['valor']
+                            
+                            # 3. Procuramos a parcela correta
+                            for linha in linhas_do_carne:
+                                # Critério: Tem que ter uma data (/) e NÃO pode estar paga
+                                # Além disso, a linha não pode ser o cabeçalho "Valor Total: R$ ..."
+                                if "/" in linha and "(Pago!)" not in linha and "Total:" not in linha:
+                                    partes = linha.split()
+                                    if len(partes) > 0:
+                                        # Pegamos apenas o número, removendo "R$" se existir por erro
+                                        valor_sujo = partes[0].replace("R$", "").strip()
+                                        # Substituímos vírgula por ponto para o Python entender como número
+                                        valor_final_pix = valor_sujo.replace(",", ".")
+                                        break # Para na primeira parcela aberta que encontrar
+                            
+                            # 4. Gera a mensagem com o valor filtrado
+                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, valor_final_pix))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
 
                     with c_h[4]: # EXCLUIR
