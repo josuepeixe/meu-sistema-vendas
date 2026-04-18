@@ -288,63 +288,60 @@ elif menu == "Histórico de Vendas":
                 if st.session_state[edit_key]:
                     st.info("💡 Modo de Edição")
     
-                    # 1. Criamos uma variável de "buffer" no estado da sessão se ela não existir
-                    temp_carne_key = f"temp_carne_{row['id']}"
-                    if temp_carne_key not in st.session_state:
-                        st.session_state[temp_carne_key] = row['carne']
+                    # Definimos a chave única do widget
+                    txt_key = f"txt_edit_{row['id']}"
+                    
+                    # Se for a primeira vez abrindo a edição, carregamos o valor atual do carnê
+                    if txt_key not in st.session_state:
+                        st.session_state[txt_key] = row['carne']
                 
                     col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
                     with col_ed1:
-                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_edit_{row['id']}")
+                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_input_{row['id']}")
                     with col_ed2:
-                        n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}")
+                        n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_input_{row['id']}")
                     with col_ed3:
-                        qtd_atual = sum(1 for l in str(row['carne']).split('\n') if "/" in l)
-                        n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=qtd_atual, key=f"q_edit_{row['id']}")
+                        qtd_atual = sum(1 for l in str(st.session_state[txt_key]).split('\n') if "/" in l)
+                        n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=max(1, qtd_atual), key=f"q_input_{row['id']}")
                 
-                    # 2. O campo de texto agora lê do nosso BUFFER (temp_carne_key)
-                    # Importante: O valor do campo é o que está no buffer, mas o widget tem sua própria key
-                    novo_carne = st.text_area(
-                        "Detalhamento do Carnê", 
-                        value=st.session_state[temp_carne_key], 
-                        height=200, 
-                        key=f"widget_txt_{row['id']}"
-                    )
-                
-                    # 3. O botão de recalcular agora altera o BUFFER e dá um rerun
-                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}"):
+                    # --- LÓGICA DE RECALCULO (DEVE VIR ANTES DO TEXT_AREA) ---
+                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}", use_container_width=True):
                         novos_valores = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
+                        # Data base para o novo parcelamento (próximo mês)
                         data_base = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
                         
-                        texto_recalculado = f"{novo_prod}\nValor Total: R$ {n_valor:.2f}\n\n"
+                        novo_texto = f"{novo_prod}\nValor Total: R$ {n_valor:.2f}\n\n"
                         for i, v in enumerate(novos_valores):
                             data_f = (data_base + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
-                            texto_recalculado += f"{v:.2f} {data_f}\n"
+                            novo_texto += f"{v:.2f} {data_f}\n"
                         
-                        # ATUALIZAÇÃO SEGURA: Alteramos o buffer e reiniciamos o desenho da tela
-                        st.session_state[temp_carne_key] = texto_recalculado
-                        st.rerun()
+                        # Atualizamos o estado da sessão DIRETAMENTE na chave do widget
+                        st.session_state[txt_key] = novo_texto
+                        st.rerun() # Força o app a redesenhar o campo de texto com o novo valor
+                
+                    # --- AGORA DESENHAMOS O CAMPO DE TEXTO ---
+                    # Ele automaticamente pegará o valor de st.session_state[txt_key]
+                    novo_carne = st.text_area("Detalhamento do Carnê", key=txt_key, height=200)
                 
                     st.divider()
                     col_save1, col_save2 = st.columns(2)
                     with col_save1:
-                        if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary"):
+                        if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary", use_container_width=True):
                             df_vendas.at[index, 'produtos'] = novo_prod
                             df_vendas.at[index, 'valor'] = str(n_valor)
-                            # Salvamos o que estiver no campo de texto (novo_carne)
-                            df_vendas.at[index, 'carne'] = novo_carne
+                            df_vendas.at[index, 'carne'] = st.session_state[txt_key]
                             
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
                             
-                            # Limpa o buffer ao fechar
-                            del st.session_state[temp_carne_key]
+                            # Limpamos a chave temporária ao sair
+                            del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             atualizar_sistema()
                             
                     with col_save2:
-                        if st.button("❌ Cancelar", key=f"cancel_{row['id']}"):
-                            if temp_carne_key in st.session_state:
-                                del st.session_state[temp_carne_key]
+                        if st.button("❌ Cancelar", key=f"cancel_{row['id']}", use_container_width=True):
+                            if txt_key in st.session_state:
+                                del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             st.rerun()
                 else:
