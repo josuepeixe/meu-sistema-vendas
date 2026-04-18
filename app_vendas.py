@@ -286,20 +286,52 @@ elif menu == "Histórico de Vendas":
             
             with st.expander(label_expander):
                 if st.session_state[edit_key]:
-                    st.info("💡 Modo de edição ativo.")
-                    novo_valor = st.number_input("Valor Total", value=float(row['valor']), key=f"v_edit_{row['id']}_{i}")
-                    novo_carne = st.text_area("Detalhamento", value=row['carne'], height=200, key=f"c_edit_{row['id']}_{i}")
-                    
-                    col_save1, col_save2 = st.columns(2)
-                    if col_save1.button("💾 Salvar", key=f"save_{row['id']}_{i}", type="primary"):
-                        df_vendas.at[index, 'valor'] = str(novo_valor)
-                        df_vendas.at[index, 'carne'] = novo_carne
-                        conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                        st.session_state[edit_key] = False
-                        atualizar_sistema()
-                    if col_save2.button("❌ Cancelar", key=f"cancel_{row['id']}"):
-                        st.session_state[edit_key] = False
+                    st.info("💡 Modo de Edição Inteligente")
+    
+                    col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
+                    with col_ed1:
+                        novo_prod = st.text_area("Produtos (Atualize se necessário)", value=row['produtos'], key=f"p_edit_{row['id']}")
+                    with col_ed2:
+                        n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}")
+                    with col_ed3:
+                        # Sugere a quantidade de parcelas atual baseada nas linhas do carnê
+                        qtd_atual = sum(1 for l in str(row['carne']).split('\n') if "/" in l)
+                        n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=qtd_atual, key=f"q_edit_{row['id']}")
+                
+                    # Área do texto do carnê (o usuário ainda pode ajustar manualmente se quiser)
+                    novo_carne = st.text_area("Detalhamento do Carnê (Texto)", value=row['carne'], height=200, key=f"txt_edit_{row['id']}")
+                
+                    # BOTÃO MÁGICO: Recalcular automaticamente o texto acima
+                    if st.button("🔄 Recalcular Parcelas e Atualizar Texto", key=f"btn_recalc_{row['id']}"):
+                        novos_valores = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
+                        # Definimos a data de início como o próximo mês a partir de hoje para o novo plano
+                        data_base = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+                        
+                        texto_recalculado = f"{novo_prod}\nValor Total: R$ {n_valor:.2f}\n\n"
+                        for i, v in enumerate(novos_valores):
+                            data_f = (data_base + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
+                            texto_recalculado += f"{v:.2f} {data_f}\n"
+                        
+                        # Atualizamos o valor na memória para o usuário ver antes de salvar
+                        st.session_state[f"txt_edit_{row['id']}"] = texto_recalculado
                         st.rerun()
+
+                        st.divider()
+                        col_save1, col_save2 = st.columns(2)
+                        with col_save1:
+                            if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary"):
+                                # Atualiza o DataFrame com os novos valores dos campos
+                                df_vendas.at[index, 'produtos'] = novo_prod
+                                df_vendas.at[index, 'valor'] = str(n_valor)
+                                df_vendas.at[index, 'carne'] = st.session_state[f"txt_edit_{row['id']}"]
+                                
+                                conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                                st.session_state[edit_key] = False
+                                atualizar_sistema()
+                        with col_save2:
+                            if st.button("❌ Cancelar", key=f"cancel_{row['id']}"):
+                                st.session_state[edit_key] = False
+                                st.rerun()
                 else:
                     # Exibe a barra de progresso visual
                     st.progress(percentual)
