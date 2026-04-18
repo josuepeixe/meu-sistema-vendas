@@ -419,8 +419,24 @@ elif menu == "Histórico de Vendas":
                             st.rerun()
 
                     with c_h[2]: # WHATSAPP (Usa o tel_f otimizado)
-                        msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
+                        tel_f = dict_telefones.get(row['cliente'], "")
+                        # Criando uma mensagem super organizada
+                        texto_whatsapp = (
+                            f"💠 *RESUMO DA COMPRA* 💠\n\n"
+                            f"👤 *Cliente:* {row['cliente']}\n"
+                            f"📅 *Data da Venda:* {row['data']}\n"
+                            f"------------------------------------------\n"
+                            f"📋 *DETALHAMENTO:*\n"
+                            f"{row['carne']}\n"
+                            f"------------------------------------------\n"
+                            f"✅ *Status Atual:* {row['status']}\n\n"
+                            f"Qualquer dúvida, estou à disposição! 😊"
+                        )
+                        
+                        msg = urllib.parse.quote(texto_whatsapp)
                         st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
+                        #msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
+                        #st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
 
                     with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
