@@ -349,196 +349,160 @@ elif menu == "Histórico de Vendas":
         df_f = df_f.sort_values(by='id', ascending=False)
 
         for i, (index, row) in enumerate(df_f.iterrows()):
-            edit_key = f"edit_mode_{row['id']}_{i}" # Simplificado: usar apenas o ID único
+            edit_key = f"edit_mode_{row['id']}_{i}"
             if edit_key not in st.session_state: 
                 st.session_state[edit_key] = False
 
-            # --- MELHORIA VISUAL: Barra de Progresso ---
-            v_total, v_pago = extrair_valores_carne(row['carne'])
-            percentual = v_pago / v_total if v_total > 0 else 0.0
+            # --- 1. CÁLCULO DE PROGRESSO (VERSÃO JSON) ---
+            try:
+                parcelas_progresso = json.loads(row['carne'])
+                v_total_venda = sum(p['v'] for p in parcelas_progresso)
+                v_pago_venda = sum(p['v'] for p in parcelas_progresso if p['p'])
+                percentual = v_pago_venda / v_total_venda if v_total_venda > 0 else 0.0
+            except:
+                percentual = 0.0
             
-            label_expander = f"{row['cliente']} - R$ {row['valor']} (Progresso: {int(percentual*100)}%)"
+            label_expander = f"{row['cliente']} - R$ {row['valor']} ({int(percentual*100)}% Pago)"
             
             with st.expander(label_expander):
+                # VERIFICAÇÃO DO MODO: EDIÇÃO OU VISUALIZAÇÃO
                 if st.session_state[edit_key]:
-                    st.info("💡 Modo de Edição Inteligente")
-        
+                    # --- MODO DE EDIÇÃO ---
+                    st.info("💡 Modo de Edição")
                     txt_key = f"txt_edit_{row['id']}"
                     
-                    # --- 1. AO ABRIR: Converte JSON da planilha para TEXTO para o usuário editar ---
+                    # Converte JSON para TEXTO ao entrar na edição
                     if txt_key not in st.session_state:
                         try:
-                            parcelas_init = json.loads(row['carne'])
-                            texto_para_editar = ""
-                            for p in parcelas_init:
-                                status_txt = " (Pago!)" if p['p'] else ""
-                                texto_para_editar += f"{p['v']:.2f} {p['d']}{status_txt}\n"
-                            st.session_state[txt_key] = texto_para_editar
+                            p_init = json.loads(row['carne'])
+                            txt_init = ""
+                            for p in p_init:
+                                s_txt = " (Pago!)" if p['p'] else ""
+                                txt_init += f"{p['v']:.2f} {p['d']}{s_txt}\n"
+                            st.session_state[txt_key] = txt_init
                         except:
-                            st.session_state[txt_key] = row['carne'] # Fallback
-                
+                            st.session_state[txt_key] = row['carne']
+                    
                     col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
                     with col_ed1:
-                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_input_{row['id']}")
-                        n_freq = st.radio("Nova Frequência", ["Mensal", "Quinzena"], horizontal=True, key=f"f_input_{row['id']}")
+                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_in_{row['id']}_{i}")
+                        n_freq = st.radio("Frequência", ["Mensal", "Quinzena"], horizontal=True, key=f"f_in_{row['id']}_{i}")
                     with col_ed2:
-                        n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_input_{row['id']}")
+                        n_valor = st.number_input("Total (R$)", value=float(row['valor']), key=f"v_in_{row['id']}_{i}")
                         if n_freq == "Quinzena":
-                            n_dia_base = st.selectbox("Dia Base", [1, 15], key=f"d_input_{row['id']}")
+                            n_dia_base = st.selectbox("Dia Base", [1, 15], key=f"d_in_{row['id']}_{i}")
                     with col_ed3:
-                        # Conta parcelas no texto atual
-                        qtd_atual = sum(1 for l in st.session_state[txt_key].split('\n') if "/" in l)
-                        n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=max(1, qtd_atual), key=f"q_input_{row['id']}")
-                
-                    # --- 2. RECALCULAR: Gera TEXTO formatado (e não JSON bruto) ---
-                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}_{i}", use_container_width=True):
-                        novos_v = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
-                        data_corrente = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
-                        if n_freq == "Quinzena": data_corrente = data_corrente.replace(day=n_dia_base)
+                        qtd_at = sum(1 for l in st.session_state[txt_key].split('\n') if "/" in l)
+                        n_parc = st.number_input("Parcelas", min_value=1, value=max(1, qtd_at), key=f"q_in_{row['id']}_{i}")
+
+                    if st.button("🔄 Recalcular", key=f"recalc_{row['id']}_{i}", use_container_width=True):
+                        v_recalc = calcular_parcelas_inteiras(n_valor, int(n_parc))
+                        data_c = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+                        if n_freq == "Quinzena": data_c = data_c.replace(day=n_dia_base)
                         
-                        novo_texto_recalc = ""
-                        for idx in range(int(n_parcelas)):
-                            data_str = data_corrente.strftime("%d/%m")
-                            novo_texto_recalc += f"{float(novos_v[idx]):.2f} {data_str}\n"
-                            
+                        txt_recalc = ""
+                        for idx_r in range(int(n_parc)):
+                            txt_recalc += f"{float(v_recalc[idx_r]):.2f} {data_c.strftime('%d/%m')}\n"
                             if n_freq == "Quinzena":
-                                if data_corrente.day == 1: data_corrente = data_corrente.replace(day=15)
-                                else: data_corrente = (data_corrente + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
-                            else:
-                                data_corrente = data_corrente + dateutil.relativedelta.relativedelta(months=1)
-                        
-                        st.session_state[txt_key] = novo_texto_recalc
+                                if data_c.day == 1: data_c = data_c.replace(day=15)
+                                else: data_c = (data_c + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+                            else: data_c = data_c + dateutil.relativedelta.relativedelta(months=1)
+                        st.session_state[txt_key] = txt_recalc
                         st.rerun()
-                
-                    # O campo de texto agora mostra o carnê bonitinho (250.00 15/05)
-                    novo_carne_texto = st.text_area("Detalhamento do Carnê", value=st.session_state[txt_key], height=200, key=f"area_{row['id']}")
-                
-                    st.divider()
-                    col_save1, col_save2 = st.columns(2)
-                    with col_save1:
-                        if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary", use_container_width=True):
-                            # --- 3. AO SALVAR: Converte o TEXTO do campo de volta para JSON ---
-                            linhas = novo_carne_texto.split('\n')
-                            nova_lista_json = []
-                            cont = 1
-                            for linha in linhas:
+
+                    novo_carne_txt = st.text_area("Detalhamento", value=st.session_state[txt_key], height=150, key=f"area_{row['id']}_{i}")
+
+                    c_save1, c_save2 = st.columns(2)
+                    with c_save1:
+                        if st.button("💾 Salvar", key=f"sv_{row['id']}_{i}", type="primary", use_container_width=True):
+                            linhas = novo_carne_txt.split('\n')
+                            js_lista = []
+                            for c_idx, linha in enumerate(linhas):
                                 if "/" in linha:
                                     try:
                                         partes = linha.split()
-                                        v_parc = float(partes[0].replace(',', '.'))
-                                        d_parc = partes[1]
-                                        p_parc = "(Pago!)" in linha
-                                        nova_lista_json.append({"n": cont, "v": v_parc, "d": d_parc, "p": p_parc})
-                                        cont += 1
+                                        js_lista.append({
+                                            "n": c_idx + 1,
+                                            "v": float(partes[0].replace(',', '.')),
+                                            "d": partes[1],
+                                            "p": "(Pago!)" in linha
+                                        })
                                     except: continue
                             
                             df_vendas.at[index, 'produtos'] = novo_prod
                             df_vendas.at[index, 'valor'] = str(n_valor)
-                            df_vendas.at[index, 'carne'] = json.dumps(nova_lista_json)
-                            
+                            df_vendas.at[index, 'carne'] = json.dumps(js_lista)
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                            
-                            if txt_key in st.session_state: del st.session_state[txt_key]
+                            del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             atualizar_sistema()
-                            
-                    with col_save2:
-                        if st.button("❌ Cancelar", key=f"cancel_{row['id']}", use_container_width=True):
-                            if txt_key in st.session_state: del st.session_state[txt_key]
+                    with c_save2:
+                        if st.button("❌ Cancelar", key=f"cn_{row['id']}_{i}", use_container_width=True):
+                            del st.session_state[txt_key]
                             st.session_state[edit_key] = False
                             st.rerun()
-            
+
                 else:
-                    # --- MODO DE VISUALIZAÇÃO: ONDE A MÁGICA ACONTECE ---
+                    # --- MODO DE VISUALIZAÇÃO ---
                     st.progress(percentual)
-                    
                     try:
-                        # 1. Carregamos o JSON
-                        parcelas_lista = json.loads(row['carne'])
-                        
-                        # 2. Criamos o texto formatado para o usuário
-                        texto_bonito = f"📋 {row['produtos']}\n"
-                        texto_bonito += f"💰 Valor Total: R$ {float(row['valor']):.2f}\n"
-                        texto_bonito += "-" * 35 + "\n"
-                        
-                        for p in parcelas_lista:
-                            icone = "✅" if p['p'] else "⏳"
-                            pago_aviso = " (Pago!)" if p['p'] else ""
-                            # Formata: ✅ 250.00 | 15/06 (Pago!)
-                            texto_bonito += f"{icone} {p['v']:.2f}  |  {p['d']}{pago_aviso}\n"
-                        
-                        # 3. Exibimos o texto formatado
-                        st.code(texto_bonito, language="text")
-                        
+                        p_lista = json.loads(row['carne'])
+                        exibicao = f"📦 {row['produtos']}\n💰 Total: R$ {float(row['valor']):.2f}\n" + "-"*30 + "\n"
+                        for p_item in p_lista:
+                            ic = "✅" if p_item['p'] else "⏳"
+                            pg = " (Pago!)" if p_item['p'] else ""
+                            exibicao += f"{ic} {p_item['v']:.2f} | {p_item['d']}{pg}\n"
+                        st.code(exibicao, language="text")
                     except:
-                        # Caso algum dado antigo ainda não seja JSON
-                        st.warning("Formato antigo detectado:")
+                        st.warning("Formato antigo detectado")
                         st.code(row['carne'])
                     
-                    # --- COLUNAS DE BOTÕES ---
-                    c_h = st.columns([1, 1, 1, 1, 1]) 
+                    c_btns = st.columns([1, 1, 1, 1, 1])
                     tel_f = dict_telefones.get(row['cliente'], "")
-            
-                    with c_h[0]: # PAGAR
-                        if st.button("💰", key=f"p_{row['id']}_{i}"):
-                            parcelas = json.loads(row['carne'])
-                            for p in parcelas:
-                                if not p['p']:
-                                    p['p'] = True
+
+                    with c_btns[0]: # PAGAR
+                        if st.button("💰", key=f"pay_{row['id']}_{i}"):
+                            p_at = json.loads(row['carne'])
+                            for item in p_at:
+                                if not item['p']:
+                                    item['p'] = True
                                     break
-                            df_vendas.at[index, 'carne'] = json.dumps(parcelas)
-                            df_vendas.at[index, 'status'] = "Pago" if all(p['p'] for p in parcelas) else "Pagamento Parcial"
+                            df_vendas.at[index, 'carne'] = json.dumps(p_at)
+                            df_vendas.at[index, 'status'] = "Pago" if all(x['p'] for x in p_at) else "Parcial"
                             conn.update(worksheet="vendas", data=df_vendas.astype(str))
                             atualizar_sistema()
-            
-                    with c_h[1]: # EDITAR
-                        if st.button("✏️", key=f"btn_edit_{row['id']}_{i}"):
+
+                    with c_btns[1]: # EDITAR
+                        if st.button("✏️", key=f"ed_{row['id']}_{i}"):
                             st.session_state[edit_key] = True
                             st.rerun()
 
-                    with c_h[2]: # WHATSAPP (Usa o tel_f otimizado)
-                        tel_f = dict_telefones.get(row['cliente'], "")
-    
-                        # 1. Traduz o JSON para um texto legível
-                        parcelas_list = json.loads(row['carne'])
-                        carne_txt = ""
-                        for p in parcelas_list:
-                            icone = "✅" if p['p'] else "⏳"
-                            status_v = " (Pago)" if p['p'] else ""
-                            carne_txt += f"{icone} R$ {p['v']:.2f} - {p['d']}{status_v}\n"
-                    
-                        # 2. Monta a mensagem completa
-                        texto_whatsapp = (
-                            f"💠 *RESUMO GERAL DA COMPRA* 💠\n\n"
-                            f"👤 *Cliente:* {row['cliente']}\n"
-                            f"📅 *Data da Venda:* {row['data']}\n"
-                            f"📦 *Produtos:* {row['produtos']}\n"
-                            f"💰 *Valor Total:* R$ {float(row['valor']):.2f}\n"
-                            f"------------------------------------------\n"
-                            f"📑 *DETALHAMENTO DO CARNÊ:*\n\n"
-                            f"```\n{carne_txt}```\n" # Monospace para alinhar datas e valores
-                            f"------------------------------------------\n"
-                            f"✅ *Status:* {row['status']}\n\n"
-                            f"Qualquer dúvida sobre os pagamentos, é só me chamar! 😊"
-                        )
+                    with c_btns[2]: # WHATSAPP
+                        p_zap = json.loads(row['carne'])
+                        zap_txt = ""
+                        for pz in p_zap:
+                            iz = "✅" if pz['p'] else "⏳"
+                            zap_txt += f"{iz} R$ {pz['v']:.2f} - {pz['d']}\n"
                         
-                        msg = urllib.parse.quote(texto_whatsapp)
-                        st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
+                        msg_full = urllib.parse.quote(
+                            f"💠 *RESUMO DA COMPRA* 💠\n\n👤 *Cliente:* {row['cliente']}\n📅 *Data:* {row['data']}\n"
+                            f"📦 *Produtos:* {row['produtos']}\n💰 *Total:* R$ {float(row['valor']):.2f}\n"
+                            f"------------------------------------------\n📑 *DETALHAMENTO:*\n```\n{zap_txt}```\n"
+                            f"------------------------------------------\n😊 Qualquer dúvida, conte conosco!"
+                        )
+                        st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_full}")
 
-                    with c_h[3]: # PIX (Usa o tel_f otimizado)
+                    with c_btns[3]: # PIX
                         if pix_chave:
-                            parcelas = json.loads(row['carne'])
-                            # Pega a primeira que não está paga
-                            proxima = next((p for p in parcelas if not p['p']), None)
-                            valor_pix = proxima['v'] if proxima else row['valor']
-                            
-                            msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, valor_pix))
-                            st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
-                            
-                    with c_h[4]: # EXCLUIR
+                            p_pix = json.loads(row['carne'])
+                            prox = next((x for x in p_pix if not x['p']), None)
+                            v_pix = prox['v'] if prox else row['valor']
+                            m_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, v_pix))
+                            st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={m_pix}")
+
+                    with c_btns[4]: # EXCLUIR
                         with st.popover("🗑️"):
-                            st.warning("Excluir venda?")
-                            if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
+                            if st.button("Confirmar Exclusão?", key=f"del_{row['id']}_{i}", type="primary"):
                                 df_vendas = df_vendas.drop(index)
                                 conn.update(worksheet="vendas", data=df_vendas.astype(str))
                                 atualizar_sistema()
