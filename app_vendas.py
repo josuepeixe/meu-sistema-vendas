@@ -286,25 +286,34 @@ elif menu == "Histórico de Vendas":
             
             with st.expander(label_expander):
                 if st.session_state[edit_key]:
-                    st.info("💡 Modo de Edição Inteligente")
+                    st.info("💡 Modo de Edição")
     
+                    # 1. Criamos uma variável de "buffer" no estado da sessão se ela não existir
+                    temp_carne_key = f"temp_carne_{row['id']}"
+                    if temp_carne_key not in st.session_state:
+                        st.session_state[temp_carne_key] = row['carne']
+                
                     col_ed1, col_ed2, col_ed3 = st.columns([2, 1, 1])
                     with col_ed1:
-                        novo_prod = st.text_area("Produtos (Atualize se necessário)", value=row['produtos'], key=f"p_edit_{row['id']}")
+                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_edit_{row['id']}")
                     with col_ed2:
                         n_valor = st.number_input("Valor Total (R$)", value=float(row['valor']), key=f"v_edit_{row['id']}")
                     with col_ed3:
-                        # Sugere a quantidade de parcelas atual baseada nas linhas do carnê
                         qtd_atual = sum(1 for l in str(row['carne']).split('\n') if "/" in l)
                         n_parcelas = st.number_input("Nº Parcelas", min_value=1, value=qtd_atual, key=f"q_edit_{row['id']}")
                 
-                    # Área do texto do carnê (o usuário ainda pode ajustar manualmente se quiser)
-                    novo_carne = st.text_area("Detalhamento do Carnê (Texto)", value=row['carne'], height=200, key=f"txt_edit_{row['id']}")
+                    # 2. O campo de texto agora lê do nosso BUFFER (temp_carne_key)
+                    # Importante: O valor do campo é o que está no buffer, mas o widget tem sua própria key
+                    novo_carne = st.text_area(
+                        "Detalhamento do Carnê", 
+                        value=st.session_state[temp_carne_key], 
+                        height=200, 
+                        key=f"widget_txt_{row['id']}"
+                    )
                 
-                    # BOTÃO MÁGICO: Recalcular automaticamente o texto acima
-                    if st.button("🔄 Recalcular Parcelas e Atualizar Texto", key=f"btn_recalc_{row['id']}"):
+                    # 3. O botão de recalcular agora altera o BUFFER e dá um rerun
+                    if st.button("🔄 Recalcular Parcelas", key=f"btn_recalc_{row['id']}"):
                         novos_valores = calcular_parcelas_inteiras(n_valor, int(n_parcelas))
-                        # Definimos a data de início como o próximo mês a partir de hoje para o novo plano
                         data_base = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
                         
                         texto_recalculado = f"{novo_prod}\nValor Total: R$ {n_valor:.2f}\n\n"
@@ -312,26 +321,32 @@ elif menu == "Histórico de Vendas":
                             data_f = (data_base + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
                             texto_recalculado += f"{v:.2f} {data_f}\n"
                         
-                        # Atualizamos o valor na memória para o usuário ver antes de salvar
-                        st.session_state[f"txt_edit_{row['id']}"] = texto_recalculado
+                        # ATUALIZAÇÃO SEGURA: Alteramos o buffer e reiniciamos o desenho da tela
+                        st.session_state[temp_carne_key] = texto_recalculado
                         st.rerun()
-
-                        st.divider()
-                        col_save1, col_save2 = st.columns(2)
-                        with col_save1:
-                            if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary"):
-                                # Atualiza o DataFrame com os novos valores dos campos
-                                df_vendas.at[index, 'produtos'] = novo_prod
-                                df_vendas.at[index, 'valor'] = str(n_valor)
-                                df_vendas.at[index, 'carne'] = st.session_state[f"txt_edit_{row['id']}"]
-                                
-                                conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                                st.session_state[edit_key] = False
-                                atualizar_sistema()
-                        with col_save2:
-                            if st.button("❌ Cancelar", key=f"cancel_{row['id']}"):
-                                st.session_state[edit_key] = False
-                                st.rerun()
+                
+                    st.divider()
+                    col_save1, col_save2 = st.columns(2)
+                    with col_save1:
+                        if st.button("💾 Salvar Alterações", key=f"save_{row['id']}", type="primary"):
+                            df_vendas.at[index, 'produtos'] = novo_prod
+                            df_vendas.at[index, 'valor'] = str(n_valor)
+                            # Salvamos o que estiver no campo de texto (novo_carne)
+                            df_vendas.at[index, 'carne'] = novo_carne
+                            
+                            conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                            
+                            # Limpa o buffer ao fechar
+                            del st.session_state[temp_carne_key]
+                            st.session_state[edit_key] = False
+                            atualizar_sistema()
+                            
+                    with col_save2:
+                        if st.button("❌ Cancelar", key=f"cancel_{row['id']}"):
+                            if temp_carne_key in st.session_state:
+                                del st.session_state[temp_carne_key]
+                            st.session_state[edit_key] = False
+                            st.rerun()
                 else:
                     # Exibe a barra de progresso visual
                     st.progress(percentual)
