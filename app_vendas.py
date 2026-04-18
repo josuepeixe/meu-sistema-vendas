@@ -476,13 +476,14 @@ elif menu == "Histórico de Vendas":
                             
                             msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, valor_pix))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
-                                        with c_h[4]: # EXCLUIR
-                                            with st.popover("🗑️"):
-                                                st.warning("Excluir venda?")
-                                                if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
-                                                    df_vendas = df_vendas.drop(index)
-                                                    conn.update(worksheet="vendas", data=df_vendas.astype(str))
-                                                    atualizar_sistema()
+                            
+                    with c_h[4]: # EXCLUIR
+                        with st.popover("🗑️"):
+                            st.warning("Excluir venda?")
+                            if st.button("Sim", key=f"conf_del_{row['id']}_{i}", type="primary"):
+                                df_vendas = df_vendas.drop(index)
+                                conn.update(worksheet="vendas", data=df_vendas.astype(str))
+                                atualizar_sistema()
 
 # --- 5. CONFIGURAÇÕES PIX ---
 elif menu == "Configurações Pix":
