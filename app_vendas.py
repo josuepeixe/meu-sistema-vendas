@@ -90,12 +90,14 @@ def calcular_parcelas_inteiras(total, num_p):
 
 def gerar_pix_texto(chave, nome, valor):
     msg = (
-        f"💠 *DADOS PARA PAGAMENTO PIX*\n\n"
+        f"💠 *DADOS PARA PAGAMENTO PIX* 💠\n\n"
+        f"Olá! Aqui estão os dados para facilitar o seu pagamento:\n\n"
         f"💰 *Valor:* R$ {float(valor):.2f}\n"
         f"👤 *Recebedor:* {nome.upper()}\n"
-        f"🔑 *Chave:* {chave}\n\n"
-        f"----------\n"
-        f"Basta usar a chave acima no seu app do banco! 😊"
+        f"🔑 *Chave:* `{chave}`\n\n"
+        f"------------------------------------------\n"
+        f"💡 *Dica:* Copie a chave acima e utilize a opção 'Pix Copia e Cola' ou 'Chave Pix' no seu banco.\n\n"
+        f"Após realizar o pagamento, se puder me enviar o comprovante, eu já atualizo aqui no sistema! 😊"
     )
     return msg
 
@@ -263,8 +265,21 @@ elif menu == "Histórico de Vendas":
                             
                             c1, c2 = st.columns(2)
                             with c1:
-                                msg = urllib.parse.quote(f"Olá {row['cliente']}! Parcela de R$ {p[0]} venceu em {p[1]}.\n\n{carne}")
-                                st.link_button(f"📲 Cobrar", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
+                                texto_cobranca = (
+                                    f"⚠️ *AVISO DE VENCIMENTO* ⚠️\n\n"
+                                    f"Olá, *{row['cliente']}*! Tudo bem?\n"
+                                    f"notamos que uma parcela sua venceu recentemente:\n\n"
+                                    f"💵 *Valor:* R$ {p[0]}\n"
+                                    f"📅 *Vencimento:* {p[1]}\n"
+                                    f"------------------------------------------\n"
+                                    f"📑 *RESUMO DO SEU CARNÊ:*\n"
+                                    f"{carne}\n"
+                                    f"------------------------------------------\n\n"
+                                    f"Poderia nos confirmar se o pagamento já foi feito? Se precisar do PIX, é só avisar! 😊"
+                                )
+                                
+                                msg_c = urllib.parse.quote(texto_cobranca)
+                                st.link_button(f"📲 Cobrar {row['cliente']}", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_c}")
                             with c2:
                                 if pix_chave:
                                     msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, p[0]))
@@ -435,8 +450,6 @@ elif menu == "Histórico de Vendas":
                         
                         msg = urllib.parse.quote(texto_whatsapp)
                         st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
-                        #msg = urllib.parse.quote(f"Olá {row['cliente']}! Resumo da compra:\n\n{row['carne']}")
-                        #st.link_button("🟢", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg}")
 
                     with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
