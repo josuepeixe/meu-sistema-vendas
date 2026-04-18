@@ -112,14 +112,23 @@ pix_nome = str(df_config.at[0, 'nome_pix']) if not df_config.empty else ""
 if menu == "Registrar Venda Nova":
     st.subheader("📝 Novo Registro Automático")
     if df_clientes.empty:
-        st.warning("Cadastre um cliente primeiro.")
+        st.warning("Cadastre um cliente primeiro no menu 'Registrar Cliente'.")
     else:
         col1, col2 = st.columns(2)
         with col1:
             cliente_sel = st.selectbox("Selecione o Cliente", df_clientes['nome'].unique())
             valor_t = st.number_input("Valor Total (R$)", min_value=0.0, step=1.0, value=None)
-            st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão"])
-            data_p = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+            freq = st.radio("Forma de Pagamento", ["Mensal", "Quinzena", "Cartão (Maquininha)"])
+            
+            # --- O MENU QUE VOLTOU: Lógica de Quinzena ---
+            if freq == "Quinzena":
+                dia_base = st.selectbox("Dia Base da Quinzena (Próximo Mês)", [1, 15])
+                # Ajusta a data inicial para o dia 1 ou 15 do mês que vem
+                data_p = (datetime.now() + dateutil.relativedelta.relativedelta(months=1)).replace(day=dia_base)
+            else:
+                # Padrão mensal: Mesma data de hoje, no mês que vem
+                data_p = datetime.now() + dateutil.relativedelta.relativedelta(months=1)
+
         with col2:
             num_p = st.number_input("Nº de Parcelas", min_value=1, value=1)
             prod = st.text_area("Produtos")
@@ -128,13 +137,36 @@ if menu == "Registrar Venda Nova":
             if cliente_sel and valor_t and prod:
                 valores = calcular_parcelas_inteiras(valor_t, int(num_p))
                 carne = f"{prod}\nValor Total: R$ {valor_t:.2f}\n\n"
-                for i, v in enumerate(valores):
-                    data_f = (data_p + dateutil.relativedelta.relativedelta(months=i)).strftime("%d/%m")
-                    carne += f"{v:.2f} {data_f}\n"
                 
-                # ID Inteligente
+                # --- LÓGICA DE GERAÇÃO DAS DATAS ---
+                data_corrente = data_p
+                for i in range(int(num_p)):
+                    data_f = data_corrente.strftime("%d/%m")
+                    carne += f"{valores[i]:.2f} {data_f}\n"
+                    
+                    if freq == "Quinzena":
+                        # Alterna entre dia 1 e 15
+                        if data_corrente.day == 1:
+                            data_corrente = data_corrente.replace(day=15)
+                        else:
+                            # Se era dia 15, pula para o dia 1 do PRÓXIMO mês
+                            data_corrente = (data_corrente + dateutil.relativedelta.relativedelta(months=1)).replace(day=1)
+                    else:
+                        # Padrão mensal: pula um mês cheio
+                        data_corrente = data_corrente + dateutil.relativedelta.relativedelta(months=1)
+
+                # Salva no Banco de Dados
                 id_novo = int(df_vendas['id'].astype(int).max()) + 1 if not df_vendas.empty else 1
-                nova_v = pd.DataFrame([{"id": id_novo, "cliente": cliente_sel, "produtos": prod, "valor": valor_t, "data": datetime.now().strftime("%d/%m/%Y"), "carne": carne, "status": "Pendente"}])
+                nova_v = pd.DataFrame([{
+                    "id": id_novo, 
+                    "cliente": cliente_sel, 
+                    "produtos": prod, 
+                    "valor": valor_t, 
+                    "data": datetime.now().strftime("%d/%m/%Y"), 
+                    "carne": carne, 
+                    "status": "Pendente"
+                }])
+                
                 conn.update(worksheet="vendas", data=pd.concat([df_vendas, nova_v], ignore_index=True).astype(str))
                 atualizar_sistema()
 
