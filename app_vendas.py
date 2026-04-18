@@ -453,6 +453,19 @@ elif menu == "Histórico de Vendas":
 
                     with c_h[3]: # PIX (Usa o tel_f otimizado)
                         if pix_chave:
+                            # 1. Lógica para encontrar o valor da primeira parcela pendente no carnê
+                            linhas_carne = str(row['carne']).split('\n')
+                            valor_da_parcela = row['valor']  # Valor padrão (caso algo dê errado)
+                            
+                            for l in linhas_carne:
+                                if "/" in l and "(Pago!)" not in l:
+                                    try:
+                                        # Pega o primeiro elemento da linha (o valor)
+                                        valor_da_parcela = l.split()[0]
+                                        break # Para na primeira que encontrar pendente
+                                    except:
+                                        continue
+                                        
                             msg_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, row['valor']))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={msg_pix}")
 
