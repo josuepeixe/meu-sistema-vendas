@@ -487,11 +487,16 @@ elif menu == "Histórico de Vendas":
                             st.rerun()
 
                     with c_btns[2]: # WHATSAPP
-                        p_zap = json.loads(row['carne'])
-                        zap_txt = ""
-                        for pz in p_zap:
-                            iz = "✅" if pz['p'] else "⏳"
-                            zap_txt += f"{iz} R$ {pz['v']:.2f} - {pz['d']}\n"
+                        try:
+                            # Tenta carregar o JSON
+                            p_zap = json.loads(row['carne'])
+                            zap_txt = ""
+                            for pz in p_zap:
+                                iz = "✅" if pz['p'] else "⏳"
+                                zap_txt += f"{iz} R$ {pz['v']:.2f} - {pz['d']}\n"
+                        except:
+                            # Se der erro (Extra data ou texto puro), usa o texto como está
+                            zap_txt = str(row['carne'])
                         
                         msg_full = urllib.parse.quote(
                             f"💠 *RESUMO DA COMPRA* 💠\n\n👤 *Cliente:* {row['cliente']}\n📅 *Data:* {row['data']}\n"
@@ -503,9 +508,14 @@ elif menu == "Histórico de Vendas":
 
                     with c_btns[3]: # PIX
                         if pix_chave:
-                            p_pix = json.loads(row['carne'])
-                            prox = next((x for x in p_pix if not x['p']), None)
-                            v_pix = prox['v'] if prox else row['valor']
+                            try:
+                                p_pix = json.loads(row['carne'])
+                                prox = next((x for x in p_pix if not x['p']), None)
+                                v_pix = prox['v'] if prox else row['valor']
+                            except:
+                                # Se o JSON estiver quebrado, tenta cobrar o valor total da venda
+                                v_pix = row['valor']
+                                
                             m_pix = urllib.parse.quote(gerar_pix_texto(pix_chave, pix_nome, v_pix))
                             st.link_button("💠", f"https://api.whatsapp.com/send?phone={tel_f}&text={m_pix}")
 
