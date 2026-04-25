@@ -300,7 +300,7 @@ elif menu == "Histórico de Vendas":
                     
                     c_ed1, c_ed2, c_ed3 = st.columns([2, 1, 1])
                     with c_ed1:
-                        novo_prod = st.text_input("Produtos", value=row['produtos'], key=f"p_in_{row['id']}_{i}")
+                        novo_prod = st.text_area("Produtos", value=row['produtos'], key=f"p_in_{row['id']}_{i}", height=100)
                         n_freq = st.radio("Frequência", ["Mensal", "Quinzena"], horizontal=True, key=f"f_in_{row['id']}_{i}")
                     with c_ed2:
                         n_valor = st.number_input("Total (R$)", value=float(row['valor']), key=f"v_in_{row['id']}_{i}")
